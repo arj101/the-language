@@ -1,0 +1,10 @@
+let start = _time;
+fun printTime(start) {
+    return 'took ' + (_time - start) * 1000 + 'ms'
+}
+
+if (200 > 49) {
+print 'no'
+}
+print printTime(000);
+print "E"
