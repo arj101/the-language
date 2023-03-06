@@ -61,34 +61,18 @@ impl Parser {
 
     #[track]
     pub fn parse(&mut self) -> Result<Vec<Stmt>, ()> {
-        use termion::{color, style};
-
         self.state.had_error = false;
         let mut statements = vec![];
-
-        fn print_error(msg: &str) {
-            println!(
-                "{}{}error{}: {msg}{}",
-                style::Bold,
-                color::Fg(color::Red),
-                color::Fg(color::Reset),
-                style::Reset
-            );
-        }
 
         while !self.is_at_end() {
             match self.declaration() {
                 Ok(stmt) => statements.push(stmt),
-                Err(err) => {
-                    print_error(&err);
-                    self.report_token(&self.tokens[self.errors.last().unwrap().0]);
-                    self.recover_error();
+                Err(_) => {
+                    self.handle_last_error();
                 }
             }
-            if let Err(err) = self.consume_end_of_line("expected EOL character") {
-                print_error(&err);
-                self.report_token(&self.tokens[self.errors.last().unwrap().0]);
-                self.recover_error();
+            if let Err(_) = self.consume_end_of_line("expected EOL character") {
+                self.handle_last_error();
             }
         }
 
@@ -97,6 +81,26 @@ impl Parser {
         } else {
             Err(())
         }
+    }
+
+    fn print_error(msg: &str) {
+        use termion::{color, style};
+
+        println!(
+            "{}{}error{}: {msg}{}",
+            style::Bold,
+            color::Fg(color::Red),
+            color::Fg(color::Reset),
+            style::Reset
+        );
+    }
+
+    fn handle_last_error(&mut self) {
+        let (token_idx, msg) = self.errors.last().unwrap();
+
+        Self::print_error(msg);
+        self.report_token(&self.tokens[*token_idx]);
+        self.recover_error();
     }
 
     #[track]
