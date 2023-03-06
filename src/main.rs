@@ -45,16 +45,13 @@ fn main() {
         false
     };
 
-    let tracker_info = if args.contains(&"--track-parser".to_owned()) {
-        true
-    } else {
-        false
-    };
+    let tracker_info = args.contains(&"--track-parser".to_owned());
 
     let args_filename: Vec<&String> = args.iter().filter(|s| !s.starts_with("--")).collect();
 
     if args_filename.is_empty() {
         let mut repl = Repl::new(show_tokens, show_ast);
+        repl.load_history("./.repl_history");
         repl.run();
     } else {
         let mut lexer = Lexer::new("");

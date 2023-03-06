@@ -61,25 +61,36 @@ impl Parser {
 
     #[track]
     pub fn parse(&mut self) -> Result<Vec<Stmt>, ()> {
+        use termion::{color, style};
+
         self.state.had_error = false;
         let mut statements = vec![];
+
+        fn print_error(msg: &str) {
+            println!(
+                "{}{}error{}: {msg}{}",
+                style::Bold,
+                color::Fg(color::Red),
+                color::Fg(color::Reset),
+                style::Reset
+            );
+        }
 
         while !self.is_at_end() {
             match self.declaration() {
                 Ok(stmt) => statements.push(stmt),
                 Err(err) => {
-                    println!("Error: {err}");
+                    print_error(&err);
                     self.report_token(&self.tokens[self.errors.last().unwrap().0]);
                     self.recover_error();
                 }
             }
             if let Err(err) = self.consume_end_of_line("expected EOL character") {
-                println!("Error: {err}");
+                print_error(&err);
                 self.report_token(&self.tokens[self.errors.last().unwrap().0]);
                 self.recover_error();
             }
         }
-
 
         if !self.state.had_error {
             Ok(statements)
@@ -642,6 +653,8 @@ impl Parser {
     }
 
     fn report_token(&self, token: &Token) {
+        use termion::{color, style};
+
         let line = if let Some(line) = self.code_lines.get(token.line - 1) {
             line.to_owned()
         } else {
@@ -650,19 +663,40 @@ impl Parser {
         let lexeme_len = token.lexeme.len();
         let (start, _end) = token.col;
         let line_num_len = format!("{}", token.line).len();
-        println!("{}|", " ".repeat(line_num_len));
-        println!("{}| {}", token.line, line);
         println!(
-            "{}|{}{}",
+            " {} {}{}|{}{}",
             " ".repeat(line_num_len),
+            color::Fg(color::LightBlue),
+            style::Bold,
+            style::Reset,
+            color::Fg(color::Reset)
+        );
+        println!(
+            "{}{} {} |{}{} {}",
+            color::Fg(color::LightBlue),
+            style::Bold,
+            token.line,
+            style::Reset,
+            color::Fg(color::Reset),
+            line
+        );
+        println!(
+            " {} {}{}|{}{}{}{}{}{}",
+            " ".repeat(line_num_len),
+            color::Fg(color::LightBlue),
+            style::Bold,
+            color::Fg(color::Reset),
             " ".repeat(start),
+            color::Fg(color::Red),
             "^".repeat(lexeme_len),
+            color::Fg(color::Reset),
+            style::Reset,
         );
     }
 
     fn create_error<T>(&mut self, msg: String) -> Result<T, String> {
         self.state.had_error = true;
-        self.errors.push((self.current,msg.clone()));
+        self.errors.push((self.current, msg.clone()));
 
         Err(msg.clone())
     }

@@ -4,6 +4,7 @@ use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::utils::pretty_print_literal;
 
+use std::io;
 use std::io::{stdout, Read, Stdout, Write};
 use std::rc::Rc;
 use termion::color::{self, Green};
@@ -24,6 +25,7 @@ pub struct Repl {
     stdout: Stdout,
     env: Option<Rc<Environment>>,
     rl: Editor<()>,
+    history_file: Option<std::path::PathBuf>,
 }
 
 impl Repl {
@@ -37,11 +39,19 @@ impl Repl {
             stdout: stdout(),
             env: Some(Rc::new(Environment::new())),
             rl: Editor::new(),
+            history_file: None,
         }
+    }
+
+    pub fn load_history(&mut self, path: &str) -> Result<(), ReadlineError> {
+        self.history_file = Some(std::path::PathBuf::from(&path));
+        self.rl.load_history(&self.history_file.clone().unwrap())?;
+        Ok(())
     }
 
     pub fn run(&mut self) {
         let env = self.env.take().unwrap();
+
         self.env = Some(self.read(env));
     }
 
@@ -86,6 +96,11 @@ impl Repl {
                 Err(ReadlineError::Interrupted) => {
                     int_count += 1;
                     if int_count >= 2 {
+                        if let Some(path) = self.history_file.clone() {
+                            if let Err(err) = self.rl.save_history(&path) {
+                                println!("Error saving history: {:?}", err);
+                            }
+                        }
                         break;
                     } else {
                         println!("(Press Ctrl+C again or Ctrl+D to exit)")
