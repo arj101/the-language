@@ -28,6 +28,8 @@ use termion::raw::IntoRawMode;
 use crate::print_raw;
 use crate::println_raw;
 
+use std::fs;
+
 enum Message {
     Val(String),
     Exit,
@@ -38,11 +40,11 @@ pub struct Repl {
     print_ast: bool,
     stdout: Stdout,
     rl: Editor<()>,
-    history_file: Option<std::path::PathBuf>,
     stop_signal: Arc<AtomicBool>,
     is_interpreting: Arc<AtomicBool>,
     is_active: Arc<AtomicBool>,
     tx: Sender<Message>,
+    history_file: Option<fs::File>,
 }
 
 impl Drop for Repl {
@@ -116,7 +118,7 @@ impl Repl {
 
             if let Err(err) = result {
                 let stdout = stdout().into_raw_mode().unwrap();
-                stdout.suspend_raw_mode();
+                let _ = stdout.suspend_raw_mode();
                 println!("Interpreter panicked with \"{err:?}\"");
                 println!("bye!");
             }
@@ -135,9 +137,15 @@ impl Repl {
         }
     }
 
-    pub fn load_history(&mut self, path: &str) -> Result<(), ReadlineError> {
-        self.history_file = Some(std::path::PathBuf::from(&path));
-        self.rl.load_history(&self.history_file.clone().unwrap())?;
+    pub fn load_history(&mut self, path: &str) -> Result<(), io::Error> {
+        self.history_file = Some({
+            fs::OpenOptions::new()
+                .write(true)
+                .read(true)
+                .append(true)
+                .create(true)
+                .open(path)?
+        });
         Ok(())
     }
 
@@ -158,6 +166,14 @@ impl Repl {
 
         let mut posx = 0;
         let mut history = vec![];
+        if let Some(file_handle) = &mut self.history_file {
+            let mut buf = String::new();
+            let _ = file_handle.read_to_string(&mut buf);
+            for line in buf.lines() {
+                history.push(line.to_owned());
+            }
+        }
+
         let mut history_pos = None;
         let mut buf = String::with_capacity(256);
 
@@ -196,6 +212,9 @@ impl Repl {
                         stdout.flush().unwrap();
                         self.tx.send(Message::Val(buf.clone())).unwrap();
                         history.push(buf.clone());
+                        if let Some(file) = &mut self.history_file {
+                            let _ = write!(file, "\n{}", buf.clone());
+                        }
                         history_pos = None;
                         buf.clear();
                         posx = 0;
@@ -206,7 +225,15 @@ impl Repl {
                     Key::Ctrl('c') | Key::Ctrl('d') if !is_interpreting => {
                         int_count += 1;
                         if int_count < 2 {
-                            println_raw!("(Press ctrl+c or ctrl+d again to exit)");
+                            println_raw!(
+                                "\n\r{}(Press ctrl+c or ctrl+d again to exit){}",
+                                color::Fg(color::Magenta),
+                                color::Fg(color::Reset)
+                            );
+                            print_raw!("{}{}", prompt_arrow, termion::cursor::Save);
+                            stdout.flush().unwrap();
+                            buf.clear();
+                            posx = 0;
                         } else {
                             break;
                         }
@@ -235,7 +262,10 @@ impl Repl {
                                 {
                                     let mut offset = 0;
                                     if !buf.is_empty() {
-                                        history.push(buf);
+                                        history.push(buf.clone());
+                                        if let Some(file) = &mut self.history_file {
+                                            let _ = write!(file, "\n{}", buf.clone());
+                                        }
                                         offset += 1;
                                     };
                                     history_pos = Some(history.len() - 1 - offset);

@@ -77,8 +77,8 @@ impl Interpreter {
         let mut rt_val;
         for stmt in statements {
             if let Stmt::Return(expr) = stmt {
-                self.flags.return_backtrack = true;
                 let val = self.eval_expr(&expr);
+                self.flags.return_backtrack = true; 
                 self.pop_env();
                 return val;
             } else {
@@ -130,7 +130,7 @@ impl Interpreter {
             } => {
                 let condition = self.evaluate(expr);
                 let Stmt::Block(if_block) = *if_block.clone() else {unreachable!()};
-                if let LiteralType::Bool(true) = condition {
+                if Self::to_bool(condition) {
                     return self.exec_block(&if_block);
                 }
                 LiteralType::Null
@@ -143,7 +143,7 @@ impl Interpreter {
                 let condition = self.evaluate(expr);
                 let Stmt::Block(if_block) = *if_block.clone() else { unreachable!()};
                 let Stmt::Block(else_block) = *else_block.clone() else { unreachable!() };
-                if let LiteralType::Bool(true) = condition {
+                if Self::to_bool(condition) {
                     self.exec_block(&if_block)
                 } else {
                     self.exec_block(&else_block)
@@ -480,20 +480,25 @@ impl Interpreter {
             (LiteralType::Str(s), LiteralType::Number(n)) => {
                 let n = n.floor() as usize;
 
-                let create_chunks = |s: String| {
+                let create_chunks = |s: String, strict_string: bool| {
                     let c = s.chars().collect::<Vec<char>>();
-                    LiteralType::Str(StrType::Loose(
+                    LiteralType::Array(Rc::new(
                         c.chunks(n)
-                            .map(|c| c.iter().collect::<String>())
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                            + " //arrays aren't implemented yet lol",
+                            .map(|c| {
+                                let s = c.iter().collect::<String>();
+                                if strict_string {
+                                    LiteralType::Str(StrType::Strict(s))
+                                } else {
+                                    LiteralType::Str(StrType::Loose(s))
+                                }
+                            })
+                            .collect::<Vec<LiteralType>>(),
                     ))
                 };
 
                 match s {
-                    StrType::Loose(s) => create_chunks(s),
-                    StrType::Strict(s) => create_chunks(s),
+                    StrType::Loose(s) => create_chunks(s, false),
+                    StrType::Strict(s) => create_chunks(s, true),
                 }
             }
             _ => LiteralType::Number(std::f64::NAN),
@@ -645,6 +650,7 @@ impl Interpreter {
     #[inline(always)]
     fn try_to_number(l: LiteralType) -> LiteralType {
         match l {
+            LiteralType::Number(number) => LiteralType::Number(number),
             LiteralType::Bool(b) => LiteralType::Number(Self::bool_to_number(b)),
             LiteralType::Null => LiteralType::Number(0.0),
             LiteralType::Str(s) => match &s {
@@ -658,6 +664,17 @@ impl Interpreter {
                 StrType::Strict(_) => LiteralType::Str(s),
             },
             everything_else => everything_else,
+        }
+    }
+
+    #[inline(always)]
+    fn to_bool(l: LiteralType) -> bool {
+        match l {
+            LiteralType::Number(number) => number >= 1.0,
+            LiteralType::Str(s) => Self::str_type_inner(s).len() > 0,
+            LiteralType::Bool(b) => b,
+            LiteralType::Null => false,
+            LiteralType::Array(arr) => !arr.is_empty(),
         }
     }
 
