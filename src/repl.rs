@@ -8,7 +8,7 @@ use std::io::{self, stdin};
 use std::io::{stdout, Read, Stdout, Write};
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{channel, Sender};
 use termion::color::{self, Green};
 
 use termion::style;
@@ -156,60 +156,179 @@ impl Repl {
 
         let mut int_count = 0;
 
+        let mut posx = 0;
+        let mut history = vec![];
+        let mut history_pos = None;
+        let mut buf = String::with_capacity(256);
+
+        let mut stdout = stdout().into_raw_mode().unwrap();
+
+        use termion::event::Key;
+
+        print_raw!("{}{}", prompt_arrow, termion::cursor::Save);
+        stdout.flush().unwrap();
+
+        let (tx, rx) = channel();
+
+        thread::spawn(move || {
+            let stdin = stdin().lock();
+            for key in stdin.keys() {
+                tx.send(key).unwrap();
+            }
+        });
+
+        let mut was_interpreting = false;
+
         loop {
-            let val = self.rl.readline(&prompt_arrow);
-            match val {
-                Ok(line) => {
-                    self.stop_signal
-                        .store(false, sync::atomic::Ordering::Relaxed);
-                    self.is_interpreting
-                        .store(true, sync::atomic::Ordering::Relaxed);
-                    self.rl.add_history_entry(&line);
-                    self.tx.send(Message::Val(line));
-                    int_count = 0;
+            let is_interpreting = self.is_interpreting.load(sync::atomic::Ordering::Relaxed);
 
+            if was_interpreting && !is_interpreting {
+                print_raw!("{}{}", prompt_arrow, termion::cursor::Save);
+                stdout.flush().unwrap();
+                was_interpreting = false;
+            }
 
-                    {
-                        let mut stdin = termion::async_stdin().keys();
-                        let stdout = stdout().into_raw_mode().unwrap();
-                        while self.is_interpreting.load(sync::atomic::Ordering::Relaxed) {
-                            if let Some(Ok(termion::event::Key::Ctrl('c'))) = stdin.next() {
-                                break;
-                            }
-                        }
-                        stdout.suspend_raw_mode().unwrap();
+            if let Ok(Ok(key)) = rx.try_recv() {
+                match key {
+                    Key::Char('\n') if !is_interpreting => {
+                        int_count = 0;
+                        print_raw!("\n\r");
+                        stdout.flush().unwrap();
+                        self.tx.send(Message::Val(buf.clone())).unwrap();
+                        // history.push(buf.clone());
+                        buf.clear();
+                        posx = 0;
+                        was_interpreting = true;
+                        self.is_interpreting.store(true, sync::atomic::Ordering::Relaxed);
                     }
-
-                    self.stop_signal
-                        .store(true, sync::atomic::Ordering::Relaxed);
-                    while self.is_interpreting.load(sync::atomic::Ordering::Relaxed) {}
-                }
-                Err(ReadlineError::Eof) => {
-                    break;
-                }
-                Err(ReadlineError::Interrupted) => {
-                    int_count += 1;
-                    if int_count >= 2 {
-                        if let Some(path) = self.history_file.clone() {
-                            if let Err(err) = self.rl.save_history(&path) {
-                                println!("Error saving history: {:?}", err);
-                            }
-                        }
-                        break;
-                    } else {
-                        if self.is_interpreting.load(sync::atomic::Ordering::Relaxed) {
-                            int_count = 0;
-                            self.stop_signal
-                                .store(true, sync::atomic::Ordering::Relaxed);
-                            while self.is_interpreting.load(sync::atomic::Ordering::Relaxed) {}
+                    Key::Ctrl('c') | Key::Ctrl('d') if !is_interpreting => {
+                        int_count += 1;
+                        if int_count < 2 {
+                            println_raw!("(Press ctrl+c or ctrl+d again to exit)");
                         } else {
-                            println!("(Press Ctrl+C again or Ctrl+D to exit)")
+                            break;
                         }
                     }
-                }
-                Err(err) => {
-                    println!("{err}");
-                    int_count = 0;
+                    Key::Ctrl('c') | Key::Ctrl('d') if is_interpreting => {
+                        self.stop_signal.store(true, sync::atomic::Ordering::Relaxed);
+                        while self.is_interpreting.load(sync::atomic::Ordering::Relaxed) {};
+                    }
+                    Key::Ctrl('l') if !is_interpreting => {
+                        print!("{}{}", termion::clear::All, termion::cursor::Goto(1, 1),);
+                        stdout.flush().unwrap();
+                        int_count = 0;
+                        print_raw!("{}{}", prompt_arrow, termion::cursor::Save);
+                        stdout.flush().unwrap();
+                        buf.clear();
+                        posx = 0;
+                    }
+                    Key::Ctrl('l') if is_interpreting => {
+                        print!("{}{}", termion::clear::All, termion::cursor::Goto(1, 1),);
+                        stdout.flush().unwrap();
+                    }
+                    Key::Up if !is_interpreting => {
+                        if let None = history_pos {
+                            if !history.is_empty() {
+                                history.push(buf);
+                                history_pos = Some(history.len() - 2);
+                                buf = history[history_pos.unwrap()].clone();
+                                print_raw!(
+                                    "{}{}{}",
+                                    termion::cursor::Restore,
+                                    buf,
+                                    termion::cursor::Left(
+                                        (buf.len() as i16 - posx as i16).max(0) as u16
+                                    )
+                                );
+                                stdout.flush().unwrap();
+                            };
+                        } else {
+                            if history_pos.unwrap() > 0 {
+                                history_pos = Some(history_pos.unwrap() - 1);
+
+                                buf = history[history_pos.unwrap()].clone();
+                                print_raw!(
+                                    "{}{}{}",
+                                    termion::cursor::Restore,
+                                    buf,
+                                    termion::cursor::Left(
+                                        (buf.len() as i16 - posx as i16).max(0) as u16
+                                    )
+                                );
+                                stdout.flush().unwrap();
+                            }
+                        }
+                    }
+                    Key::Down if !is_interpreting => {
+                        if let Some(pos) = history_pos {
+                            if pos < history.len() - 1 {
+                                history_pos = Some(pos + 1);
+
+                                buf = history[history_pos.unwrap()].clone();
+                                print_raw!(
+                                    "{}{}{}",
+                                    termion::cursor::Restore,
+                                    buf,
+                                    termion::cursor::Left(
+                                        (buf.len() as i16 - posx as i16).max(0) as u16
+                                    )
+                                );
+                                stdout.flush().unwrap();
+                            }
+                        }
+                    }
+                    Key::Left if !is_interpreting => {
+                        if posx <= 0 {
+                            continue;
+                        }
+                        posx -= 1;
+                        print_raw!("{}", termion::cursor::Left(1));
+                        stdout.flush().unwrap();
+                    }
+                    Key::Right if !is_interpreting => {
+                        if posx >= buf.len() {
+                            continue;
+                        };
+                        posx += 1;
+                        print_raw!("{}", termion::cursor::Right(1));
+                        stdout.flush().unwrap();
+                    }
+                    Key::Backspace if !is_interpreting => {
+                        if posx <= 0 {
+                            continue;
+                        }
+                        posx -= 1;
+                        buf.remove(posx);
+                        print_raw!(
+                            "{}{} {}",
+                            termion::cursor::Restore,
+                            buf,
+                            termion::cursor::Left((buf.len() - posx) as u16 + 1)
+                        );
+                        stdout.flush().unwrap();
+                    }
+                    Key::Char(c) if !is_interpreting => {
+                        int_count = 0;
+
+                        posx += 1;
+                        if posx >= buf.len() {
+                            buf.push(c);
+                            print_raw!("{}", c);
+                            stdout.flush().unwrap();
+                        } else {
+                            buf.insert(posx - 1, c);
+                            print_raw!(
+                                "{}{}{}",
+                                termion::cursor::Restore,
+                                buf,
+                                termion::cursor::Left(
+                                    (buf.len() as i16 - posx as i16).max(0) as u16
+                                )
+                            );
+                            stdout.flush().unwrap();
+                        }
+                    }
+                    _ => (),
                 }
             }
         }

@@ -68,7 +68,7 @@ impl Environment {
             parent.get(name)
         } else {
             // panic!("Attempt to read from undefined variable: `{name}`")
-            println_raw!("{name}: no such variable in scope");
+            println_raw!("{}: no such variable in scope", name);
             self.values.get("undefined").unwrap()
         }
     }
