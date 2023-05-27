@@ -1,5 +1,6 @@
 use crate::tokens::TIdentifier;
 use crate::tokens::Token;
+use crate::tokens::TokenType;
 use rustc_hash::FxHashMap;
 
 #[derive(Debug, Clone)]

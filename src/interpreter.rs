@@ -11,6 +11,8 @@ use crate::tokens::Token;
 use crate::tokens::TokenType::{self};
 use crate::utils::pretty_print_literal;
 use crate::utils::print_literal;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time;
 
 type EnvScope = Rc<Environment>;
@@ -33,15 +35,17 @@ pub struct Interpreter {
     repl_mode: bool,
     env: Rc<Environment>,
     flags: InterpreterFlags,
+    stop_signal: Arc<AtomicBool>,
 }
 
 impl Interpreter {
-    pub fn new(repl_mode: bool, env: Environment) -> Self {
+    pub fn new(repl_mode: bool, env: Environment, stop_signal: Arc<AtomicBool>) -> Self {
         let env = Rc::new(env);
         Interpreter {
             repl_mode,
             env: Rc::clone(&env),
             flags: InterpreterFlags::default(),
+            stop_signal,
         }
     }
 
@@ -167,7 +171,9 @@ impl Interpreter {
                 if let Some(updation) = &updation {
                     while let LiteralType::Bool(true) = self.evaluate(condition_expr) {
                         rt_val = self.execute_stmt(body);
-                        if self.flags.return_backtrack {
+                        if self.flags.return_backtrack
+                            || self.stop_signal.load(std::sync::atomic::Ordering::Relaxed)
+                        {
                             self.pop_env();
                             return rt_val;
                         }
@@ -176,7 +182,9 @@ impl Interpreter {
                 } else {
                     while let LiteralType::Bool(true) = self.evaluate(condition_expr) {
                         rt_val = self.execute_stmt(body);
-                        if self.flags.return_backtrack {
+                        if self.flags.return_backtrack
+                            || self.stop_signal.load(std::sync::atomic::Ordering::Relaxed)
+                        {
                             self.pop_env();
                             return rt_val;
                         }
@@ -294,22 +302,32 @@ impl Interpreter {
             _ => (),
         }
 
-        let rt_val = match operator.t_type {
-            TokenType::Plus => Self::addition(left, right),
-            TokenType::Minus => Self::subtraction(left, right),
-            TokenType::Slash => Self::division(left, right),
-            TokenType::Star => Self::multiplication(left, right),
-            TokenType::EqualEqual => Self::equal(left, right),
-            TokenType::BangEqual => Self::not_equal(left, right),
-            TokenType::Greater => Self::greater(left, right),
-            TokenType::GreaterEqual => Self::greater_equal(left, right),
-            TokenType::Less => Self::less(left, right),
-            TokenType::LessEqual => Self::less_equal(left, right),
-            TokenType::Percentage => Self::modulus(left, right),
-            _ => unreachable!(),
-        };
+        macro_rules! eval {
+            ($( $token:pat => $function:ident ),* $(,)?) => {
+                match operator.t_type {
+                    $(
+                         $token => Self::$function(left, right),
+                     )*
+                    _ => unreachable!()
+                }
+            };
+        }
 
-        rt_val
+        use TokenType::*;
+        eval! {
+            Plus => addition,
+            Minus => subtraction,
+            Slash => division,
+            Star => multiplication,
+            StarStar => exponentiation,
+            EqualEqual => equal,
+            BangEqual => not_equal,
+            Greater => greater,
+            GreaterEqual => greater_equal,
+            Less => less,
+            LessEqual => less_equal,
+            Percentage => modulus,
+        }
     }
 
     fn modulus(left: LiteralType, right: LiteralType) -> LiteralType {
@@ -417,6 +435,22 @@ impl Interpreter {
             (LiteralType::Number(a), LiteralType::Number(b)) => LiteralType::Number(a * b),
             (LiteralType::Str(s), LiteralType::Number(n)) => {
                 LiteralType::Str(Self::str_multiplication(s, n))
+            }
+            _ => LiteralType::Number(std::f64::NAN),
+        }
+    }
+
+    fn exponentiation(left: LiteralType, right: LiteralType) -> LiteralType {
+        let left = Self::try_to_number(left);
+        let right = Self::try_to_number(right);
+
+        match (left, right) {
+            (LiteralType::Number(a), LiteralType::Number(b)) => {
+                if b.floor() == b {
+                    LiteralType::Number(a.powi(b as i32))
+                } else {
+                    LiteralType::Number(a.powf(b))
+                }
             }
             _ => LiteralType::Number(std::f64::NAN),
         }

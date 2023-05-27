@@ -65,6 +65,21 @@ impl Lexer {
 
     fn scan_token(&mut self) {
         let c = self.advance();
+
+        macro_rules! add_if_matched {
+            ($c1:expr => $t1:tt $(, $cx:expr => $tx:tt)* $(, else $default:tt)? $(,)?) => {
+                if self.match_c($c1) {
+                    self.add_token($t1)
+                }
+                $(else if self.match_c($cx) {
+                    self.add_token($tx)
+                })*
+                $(else {
+                    self.add_token($default)
+                })?
+            }
+        }
+
         match c {
             '(' => self.add_token(LeftParen),
             ')' => self.add_token(RightParen),
@@ -72,11 +87,11 @@ impl Lexer {
             '}' => self.add_token(RightBrace),
             ',' => self.add_token(Comma),
             '.' => self.add_token(Dot),
-            '+' => self.add_token(Plus),
+            '+' => add_if_matched!('=' => PlusEqual, else Plus),
             ';' => self.add_token(Semicolon),
-            '*' => self.add_token(Star),
-            '-' => self.add_token(Minus),
-            '%' => self.add_token(Percentage),
+            '*' => add_if_matched!('=' => StarEqual, '*' => StarStar, else Star),
+            '-' => add_if_matched!('=' => MinusEqual, else Minus),
+            '%' => add_if_matched!('=' => PercentageEqual, else Percentage),
             '!' => self.add_token_if_matched('=', BangEqual, Bang),
             '=' => self.add_token_if_matched('=', EqualEqual, Equal),
             '<' => self.add_token_if_matched('=', LessEqual, Less),
@@ -89,7 +104,7 @@ impl Lexer {
                 } else if self.match_c('*') {
                     self.multiline_comment();
                 } else {
-                    self.add_token(Slash)
+                    add_if_matched!('=' => SlashEqual, else Slash)
                 }
             }
             '\n' => {

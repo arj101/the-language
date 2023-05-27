@@ -16,6 +16,14 @@ pub enum TokenType {
     Star,
     Percentage,
 
+    PlusEqual,
+    MinusEqual,
+    StarEqual,
+    SlashEqual,
+    PercentageEqual,
+
+    StarStar,
+
     Bang,
     BangEqual,
     Equal,
@@ -61,6 +69,14 @@ pub struct Token {
     pub literal: Option<LiteralType>,
     pub line: usize,
     pub col: (usize, usize),
+}
+
+impl Token {
+    pub fn into_new(&self, t_type: TokenType) -> Self {
+        let mut new = self.clone();
+        new.t_type = t_type;
+        new
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

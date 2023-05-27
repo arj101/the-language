@@ -4,6 +4,8 @@ use crate::tokens::TIdentifier;
 use crate::tokens::Token;
 use crate::tokens::TokenType::{self, *};
 
+use crate::print_raw;
+use crate::println_raw;
 use idk::track;
 use idk::tracker_drive_struct;
 use rustc_hash::FxHashMap;
@@ -86,7 +88,7 @@ impl Parser {
     fn print_error(msg: &str) {
         use termion::{color, style};
 
-        println!(
+        println_raw!(
             "{}{}error{}: {msg}{}",
             style::Bold,
             color::Fg(color::Red),
@@ -150,7 +152,9 @@ impl Parser {
             self.fn_def()
         } else if self.match_t(&[TokenType::Return]) {
             self.return_stmt()
-        } else if self.check_n(&tokens::empty_ident()) && self.check_ahead_n(1, &TokenType::Equal) {
+        } else if self.check_n(&tokens::empty_ident())
+        // && (self.check_ahead_n(1, &TokenType::Equal) || self.check_ahead_n(1, &TokenType::PlusEqual) {
+        {
             self.assignment_stmt()
         } else {
             self.expr_stmt()
@@ -227,10 +231,13 @@ impl Parser {
 
     #[track]
     fn assignment_stmt(&mut self) -> Result<Stmt, String> {
-        let name = self.consume(
-            &TokenType::Identifier(TIdentifier("".to_owned())),
-            "Expected variable name.",
-        )?;
+        let name = self
+            .consume(
+                &TokenType::Identifier(TIdentifier("".to_owned())),
+                "Expected variable name.",
+            )?
+            .clone();
+        let name_pos = self.current - 1; //hax >:)
 
         let name = if let TokenType::Identifier(name) = &name.t_type {
             name.clone()
@@ -238,19 +245,52 @@ impl Parser {
             unreachable!()
         };
 
-        let mut intializer = Expr::Literal(LiteralType::Null);
-        if self.match_t(&[TokenType::Equal]) {
-            intializer = self.expression()?
+        let operator = self.peek_n().clone();
+
+        macro_rules! expand {
+            ($token_type: expr) => {
+                Stmt::Assignment {
+                    id: name.clone(),
+                    expr: Expr::Binary {
+                        left: Box::new(Expr::Variable(name)),
+                        operator: operator.into_new($token_type),
+                        right: Box::new(self.expression()?),
+                    },
+                }
+            };
+        }
+
+        macro_rules! match_combined_operator {
+            ($( $combined:tt => $expanded:tt),*  $(,)? ) => {
+                match operator.t_type {
+                    $($combined => {
+                        self.match_t(&[$combined]);
+                        Ok(expand!($expanded))
+                    })*
+                    _ => {
+                        self.current = name_pos;
+                        self.expr_stmt()
+                    }
+                }
+            }
+        }
+
+        if operator.t_type == Equal {
+            self.match_t(&[Equal]);
+            Ok(Stmt::Assignment {
+                id: name,
+                expr: self.expression()?,
+            })
         } else {
-            self.report_token(&self.tokens[self.current]);
-            panic!("Expected value in assignment statement.");
+            match_combined_operator! {
+                PlusEqual => Plus,
+                MinusEqual => Minus,
+                StarEqual => Star,
+                SlashEqual => Slash,
+                PercentageEqual => Percentage,
+            }
         }
         // self.consume_end_of_line("Expected ';' after assignment statement.");
-
-        Ok(Stmt::Assignment {
-            id: name,
-            expr: intializer,
-        })
     }
 
     #[track]
@@ -418,7 +458,7 @@ impl Parser {
     fn factor(&mut self) -> Result<Expr, String> {
         let mut expr = self.unary()?;
 
-        while self.match_t(&[Slash, Star]) {
+        while self.match_t(&[Slash, Star, StarStar]) {
             let operator = self.previous().clone();
             let right = Box::new(self.unary()?);
             expr = Expr::Binary {
@@ -667,7 +707,7 @@ impl Parser {
         let lexeme_len = token.lexeme.len();
         let (start, _end) = token.col;
         let line_num_len = format!("{}", token.line).len();
-        println!(
+        println_raw!(
             " {} {}{}|{}{}",
             " ".repeat(line_num_len),
             color::Fg(color::LightBlue),
@@ -675,7 +715,7 @@ impl Parser {
             style::Reset,
             color::Fg(color::Reset)
         );
-        println!(
+        println_raw!(
             "{}{} {} |{}{} {}",
             color::Fg(color::LightBlue),
             style::Bold,
@@ -684,7 +724,7 @@ impl Parser {
             color::Fg(color::Reset),
             line
         );
-        println!(
+        println_raw!(
             " {} {}{}|{}{}{}{}{}{}",
             " ".repeat(line_num_len),
             color::Fg(color::LightBlue),
@@ -706,11 +746,11 @@ impl Parser {
     }
 
     pub fn print_tracker_info(&self) {
-        println!("\nparsing tracker info: ");
+        println_raw!("\nparsing tracker info: ");
         for line in &self.tracking_stack {
             for (i, f) in line.iter().enumerate() {
                 if let Some(dt) = f.2 {
-                    print!(
+                    print_raw!(
                         "{}<-{}{} {} [{:.1}us]{} ",
                         termion::color::Fg(termion::color::LightMagenta),
                         termion::color::Fg(termion::color::Reset),
@@ -720,21 +760,21 @@ impl Parser {
                         termion::style::Reset
                     )
                 } else {
-                    print!(
+                    print_raw!(
                         "{}->{}",
                         termion::color::Fg(termion::color::LightGreen),
                         termion::color::Fg(termion::color::Reset),
                     );
                     if i == line.len() - 1 {
-                        print!("{}", termion::style::Bold)
+                        print_raw!("{}", termion::style::Bold)
                     }
-                    print!(" {} ", f.0);
+                    print_raw!(" {} ", f.0);
                     if i == line.len() - 1 {
-                        print!("{}", termion::style::Reset)
+                        print_raw!("{}", termion::style::Reset)
                     }
                 }
             }
-            println!();
+            println_raw!();
         }
     }
 }
