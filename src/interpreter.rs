@@ -236,6 +236,14 @@ impl Interpreter {
                 EnvVal::Lt(literal) => literal.as_ref().clone(),
                 EnvVal::Fn(_, _) => LiteralType::Str(StrType::Strict(format!("[fun {name}]"))),
             },
+            Expr::ArrayExpr(array) => {
+                let mut array_evaled = vec![];
+                for expr in array {
+                    array_evaled.push(self.eval_expr(expr))
+                }
+
+                LiteralType::Array(Rc::new(array_evaled))
+            }
             Expr::DebugVariable(var) => match var {
                 DebugVariable::Time => LiteralType::Number(
                     time::SystemTime::now()
@@ -507,6 +515,32 @@ impl Interpreter {
     fn addition(left: LiteralType, right: LiteralType) -> LiteralType {
         match (&left, &right) {
             (LiteralType::Number(a), LiteralType::Number(b)) => LiteralType::Number(a + b),
+            (LiteralType::Array(array), c) => {
+                let mut array_new = array.as_ref().clone();
+                if let LiteralType::Array(array2) = c {
+                    for elt in array2.as_ref() {
+                        array_new.push(elt.clone())
+                    }
+                } else {
+                    array_new.push(c.clone());
+                };
+                LiteralType::Array(Rc::new(array_new))
+            }
+            (c, LiteralType::Array(array)) => {
+                let mut array_new = array.as_ref().clone();
+                if let LiteralType::Array(array2) = c {
+                    for elt in array2.as_ref() {
+                        array_new.push(elt.clone())
+                    }
+                } else {
+                    if array_new.is_empty() {
+                        array_new.push(c.clone())
+                    } else {
+                        array_new.insert(0, c.clone());
+                    }
+                };
+                LiteralType::Array(Rc::new(array_new))
+            }
             (LiteralType::Str(s), LiteralType::Str(s1)) => {
                 LiteralType::Str(Self::str_addition(s.clone(), s1))
             }
@@ -568,6 +602,7 @@ impl Interpreter {
                         LiteralType::Bool(false)
                     }
                 }
+                LiteralType::Array(a) => LiteralType::Bool(!a.is_empty()),
             },
             _ => unreachable!(),
         };
@@ -592,6 +627,7 @@ impl Interpreter {
                     LiteralType::Number(std::f64::NAN)
                 }
             }
+            LiteralType::Array(a) => LiteralType::Number(a.len() as f64),
         }
     }
 
@@ -602,13 +638,13 @@ impl Interpreter {
             LiteralType::Bool(b) => b.to_string(),
             LiteralType::Number(n) => n.to_string(),
             LiteralType::Null => "null".to_owned(),
+            LiteralType::Array(a) => format!("{a:?}"),
         }
     }
 
     #[inline(always)]
     fn try_to_number(l: LiteralType) -> LiteralType {
         match l {
-            LiteralType::Number(n) => LiteralType::Number(n),
             LiteralType::Bool(b) => LiteralType::Number(Self::bool_to_number(b)),
             LiteralType::Null => LiteralType::Number(0.0),
             LiteralType::Str(s) => match &s {
@@ -621,6 +657,7 @@ impl Interpreter {
                 }
                 StrType::Strict(_) => LiteralType::Str(s),
             },
+            everything_else => everything_else,
         }
     }
 

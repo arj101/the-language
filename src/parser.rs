@@ -518,6 +518,24 @@ impl Parser {
             return Ok(Expr::Grouping(Box::new(expr)));
         }
 
+        if self.match_t(&[LeftSquareBrace]) {
+            let mut array = vec![];
+
+            if self.match_t(&[RightSquareBrace]) {
+                return Ok(Expr::ArrayExpr(array));
+            }
+            array.push(self.expression()?);
+
+            loop {
+                self.match_t(&[Comma]);
+                if self.match_t(&[RightSquareBrace]) {
+                    return Ok(Expr::ArrayExpr(array));
+                }
+
+                array.push(self.expression()?);
+            }
+        }
+
         if self.check_n(&tokens::empty_ident()) {
             return self.ident_expr();
         }

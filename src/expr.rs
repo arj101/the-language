@@ -2,6 +2,7 @@ use crate::tokens::TIdentifier;
 use crate::tokens::Token;
 use crate::tokens::TokenType;
 use rustc_hash::FxHashMap;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub enum StrType {
@@ -14,6 +15,7 @@ pub enum LiteralType {
     Number(f64),
     Str(StrType),
     Bool(bool),
+    Array(Rc<Vec<LiteralType>>),
     Null,
 }
 
@@ -67,6 +69,7 @@ pub enum Expr {
     Literal(LiteralType),
     FnCall(TIdentifier, FxHashMap<String, Expr>),
     DebugVariable(DebugVariable),
+    ArrayExpr(Vec<Expr>),
 }
 
 #[derive(Debug, Clone)]

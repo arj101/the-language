@@ -90,12 +90,12 @@ impl Repl {
 
                                 let tokens = lexer.tokenise().clone();
                                 if print_tokens {
-                                    println!("tokens: {tokens:#?}");
+                                    println_raw!("tokens: \n{:?}", tokens);
                                 }
                                 parser.reset(tokens, src);
                                 if let Ok(ast) = parser.parse() {
                                     if print_ast {
-                                        println!("ast: \n{ast:#?}");
+                                        println_raw!("ast: \n{:?}", ast);
                                     }
                                     interpreter.interpret(&ast);
                                 }
@@ -195,11 +195,13 @@ impl Repl {
                         print_raw!("\n\r");
                         stdout.flush().unwrap();
                         self.tx.send(Message::Val(buf.clone())).unwrap();
-                        // history.push(buf.clone());
+                        history.push(buf.clone());
+                        history_pos = None;
                         buf.clear();
                         posx = 0;
                         was_interpreting = true;
-                        self.is_interpreting.store(true, sync::atomic::Ordering::Relaxed);
+                        self.is_interpreting
+                            .store(true, sync::atomic::Ordering::Relaxed);
                     }
                     Key::Ctrl('c') | Key::Ctrl('d') if !is_interpreting => {
                         int_count += 1;
@@ -210,8 +212,9 @@ impl Repl {
                         }
                     }
                     Key::Ctrl('c') | Key::Ctrl('d') if is_interpreting => {
-                        self.stop_signal.store(true, sync::atomic::Ordering::Relaxed);
-                        while self.is_interpreting.load(sync::atomic::Ordering::Relaxed) {};
+                        self.stop_signal
+                            .store(true, sync::atomic::Ordering::Relaxed);
+                        while self.is_interpreting.load(sync::atomic::Ordering::Relaxed) {}
                     }
                     Key::Ctrl('l') if !is_interpreting => {
                         print!("{}{}", termion::clear::All, termion::cursor::Goto(1, 1),);
@@ -229,17 +232,27 @@ impl Repl {
                     Key::Up if !is_interpreting => {
                         if let None = history_pos {
                             if !history.is_empty() {
-                                history.push(buf);
-                                history_pos = Some(history.len() - 2);
+                                {
+                                    let mut offset = 0;
+                                    if !buf.is_empty() {
+                                        history.push(buf);
+                                        offset += 1;
+                                    };
+                                    history_pos = Some(history.len() - 1 - offset);
+                                }
                                 buf = history[history_pos.unwrap()].clone();
                                 print_raw!(
-                                    "{}{}{}",
+                                    "{}{}{}{}",
                                     termion::cursor::Restore,
+                                    termion::clear::UntilNewline,
                                     buf,
                                     termion::cursor::Left(
                                         (buf.len() as i16 - posx as i16).max(0) as u16
                                     )
                                 );
+                                if posx >= buf.len() {
+                                    posx = (buf.len() as isize - 1).max(0) as usize
+                                }
                                 stdout.flush().unwrap();
                             };
                         } else {
@@ -248,13 +261,17 @@ impl Repl {
 
                                 buf = history[history_pos.unwrap()].clone();
                                 print_raw!(
-                                    "{}{}{}",
+                                    "{}{}{}{}",
                                     termion::cursor::Restore,
+                                    termion::clear::UntilNewline,
                                     buf,
                                     termion::cursor::Left(
                                         (buf.len() as i16 - posx as i16).max(0) as u16
                                     )
                                 );
+                                if posx >= buf.len() {
+                                    posx = (buf.len() as isize - 1).max(0) as usize
+                                }
                                 stdout.flush().unwrap();
                             }
                         }
@@ -266,12 +283,23 @@ impl Repl {
 
                                 buf = history[history_pos.unwrap()].clone();
                                 print_raw!(
-                                    "{}{}{}",
+                                    "{}{}{}{}",
                                     termion::cursor::Restore,
+                                    termion::clear::UntilNewline,
                                     buf,
                                     termion::cursor::Left(
                                         (buf.len() as i16 - posx as i16).max(0) as u16
                                     )
+                                );
+                                stdout.flush().unwrap();
+                            } else if !buf.is_empty() {
+                                history_pos = None;
+                                buf = String::new();
+                                print_raw!(
+                                    "{}{}{}",
+                                    termion::cursor::Restore,
+                                    termion::clear::UntilNewline,
+                                    buf,
                                 );
                                 stdout.flush().unwrap();
                             }

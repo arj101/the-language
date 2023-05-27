@@ -85,6 +85,8 @@ impl Lexer {
             ')' => self.add_token(RightParen),
             '{' => self.add_token(LeftBrace),
             '}' => self.add_token(RightBrace),
+            '[' => self.add_token(LeftSquareBrace),
+            ']' => self.add_token(RightSquareBrace),
             ',' => self.add_token(Comma),
             '.' => self.add_token(Dot),
             '+' => add_if_matched!('=' => PlusEqual, else Plus),
