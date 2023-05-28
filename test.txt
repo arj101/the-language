@@ -2,8 +2,7 @@ let depth = 0;
 
 fun fibonacci(a) {
    if a <= 1 { return 1 }
-   let val = fibonacci(a - 1) + fibonacci(a - 2);
-   return val
+   return fibonacci(a-1) + fibonacci(a-2);
 }
 
 fun test(b, a) {
@@ -12,4 +11,4 @@ fun test(b, a) {
 
 print test(1.2, 2.3);
 
-print 'return value: ' + fibonacci(10)
+print 'return value: ' + fibonacci(30)

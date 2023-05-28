@@ -176,13 +176,11 @@ impl Parser {
         };
 
         if self.match_t(&[TokenType::LeftParen]) {
-            let mut params = FxHashMap::default();
-            let mut i = 0;
+            let mut params = vec![];
             while !self.check_n(&RightParen) {
                 let arg = self.expression()?;
-                params.insert(i.to_string(), arg);
+                params.push(arg);
                 self.match_t(&[TokenType::Comma]);
-                i += 1;
             }
             self.consume(&RightParen, "Expected ')'")?;
             Ok(Expr::FnCall(ident, params))

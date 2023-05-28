@@ -262,7 +262,7 @@ impl Interpreter {
 
                 self.env = Rc::new(Environment::new_as_child(Rc::clone(&self.env)));
                 for (i, param) in params.iter().enumerate() {
-                    let val = if let Some(val) = args.get(&i.to_string()) {
+                    let val = if let Some(val) = args.get(i) {
                         let expr = self.eval_expr(val);
                         EnvVal::Lt(Rc::new(expr))
                     } else {

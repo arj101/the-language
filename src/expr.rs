@@ -67,7 +67,7 @@ pub enum Expr {
     },
     Variable(TIdentifier),
     Literal(LiteralType),
-    FnCall(TIdentifier, FxHashMap<String, Expr>),
+    FnCall(TIdentifier, Vec<Expr>),
     DebugVariable(DebugVariable),
     ArrayExpr(Vec<Expr>),
 }
