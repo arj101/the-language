@@ -14,67 +14,76 @@ pub enum EnvVal {
 }
 
 pub struct Environment {
-    values: FxHashMap<String, EnvVal>,
-    parent_scope: Option<Rc<Environment>>,
+    scopes: Vec<FxHashMap<Rc<String>, EnvVal>>,
+    curr_scope: usize,
 }
 
 impl Environment {
     pub fn new() -> Self {
-        let mut values = FxHashMap::default();
-        values.insert(
-            "undefined".to_owned(),
-            EnvVal::Lt(Rc::new(LiteralType::Null)),
-        );
         Self {
-            values,
-            parent_scope: None,
+            scopes: vec![FxHashMap::default()],
+            curr_scope: 0,
         }
     }
 
-    pub fn new_as_child(parent: Rc<Environment>) -> Self {
-        let mut values = FxHashMap::default();
-        values.insert(
-            "undefined".to_owned(),
-            EnvVal::Lt(Rc::new(LiteralType::Null)),
-        );
-        Self {
-            values: FxHashMap::default(),
-            parent_scope: Some(parent),
+    pub fn define(&mut self, name: Rc<String>, value: EnvVal) {
+        self.scopes[self.curr_scope].insert(name, value);
+    }
+
+    pub fn has_var(&self, name: &Rc<String>) -> bool {
+        self.scopes[self.curr_scope].contains_key(name)
+    }
+
+    pub fn push_scope(&mut self) {
+        self.scopes.push(FxHashMap::default());
+        self.curr_scope = self.scopes.len() - 1;
+    }
+
+    pub fn pop_scope(&mut self) -> Result<(), ()> {
+        if self.curr_scope <= 0 {
+            println_raw!("cannot pop out of global scope");
+            return Err(());
         }
+        self.scopes.pop();
+        self.curr_scope -= 1;
+        Ok(())
     }
 
-    pub fn define(&mut self, name: String, value: EnvVal) {
-        self.values.insert(name, value);
-    }
-
-    pub fn has_var(&self, name: &str) -> bool {
-        self.values.contains_key(name)
-    }
-
-    pub fn update(&mut self, name: &str, value: EnvVal) {
-        if let Some(old_val) = self.values.get_mut(name) {
+    pub fn update(&mut self, name: &Rc<String>, value: EnvVal) {
+        if let Some(old_val) = self.scopes[self.curr_scope].get_mut(name) {
             *old_val = value;
-        } else if let Some(parent) = &mut self.parent_scope {
-            Rc::get_mut(parent).unwrap().update(name, value);
-        } else {
-            panic!("Attempt to assign to undefined variable")
+            return;
         }
+
+        let mut scope_idx = self.curr_scope;
+        while scope_idx > 0 {
+            scope_idx -= 1;
+
+            if let Some(old_val) = self.scopes[scope_idx].get_mut(name) {
+                *old_val = value;
+                return;
+            }
+        }
+
+        println_raw!("{}: no such variable in scope", name);
     }
 
-    pub fn get(&self, name: &str) -> &EnvVal {
-        if let Some(val) = self.values.get(name) {
-            val
-        } else if let Some(parent) = &self.parent_scope {
-            parent.get(name)
-        } else {
-            // panic!("Attempt to read from undefined variable: `{name}`")
-            println_raw!("{}: no such variable in scope", name);
-            self.values.get("undefined").unwrap()
+    pub fn get(&self, name: &Rc<String>) -> &EnvVal {
+        if let Some(val) = self.scopes[self.curr_scope].get(name) {
+            return val;
         }
-    }
 
-    pub fn destroy(&mut self) -> Option<Rc<Environment>> {
-        self.parent_scope.borrow_mut().take()
+        let mut scope_idx = self.curr_scope;
+        while scope_idx > 0 {
+            scope_idx -= 1;
+
+            if let Some(val) = self.scopes[scope_idx].get(name) {
+                return val;
+            }
+        }
+
+        println_raw!("{}: no such variable in scope", name);
+        self.scopes[0].get(&Rc::new("undefined".to_string())).unwrap()
     }
 }
 

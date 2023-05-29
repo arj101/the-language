@@ -36,8 +36,8 @@ pub enum Stmt {
     Return(Expr),
     If {
         expr: Expr,
-        if_block: Box<Stmt>,
-        else_block: Option<Box<Stmt>>,
+        if_block: Rc<Stmt>,
+        else_block: Option<Rc<Stmt>>,
     },
     Loop {
         entry_controlled: bool,
@@ -49,7 +49,7 @@ pub enum Stmt {
     FunctionDef {
         ident: TIdentifier,
         params: Vec<TIdentifier>,
-        body: Box<Stmt>,
+        body: Box<Stmt>
     },
 }
 

@@ -1,4 +1,5 @@
 use crate::expr::LiteralType;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
@@ -83,18 +84,20 @@ impl Token {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct TIdentifier(pub String);
-impl Default for TIdentifier {
-    fn default() -> Self {
-        TIdentifier("".to_owned())
+pub struct TIdentifier(pub Rc<String>);
+
+impl TIdentifier {
+    pub fn new(s: String) -> Self {
+        Self(Rc::new(s))
+    }
+    pub fn inner(&self) -> &Rc<String> {
+        &self.0
     }
 }
 
 pub mod tokens {
     use super::{TIdentifier, TokenType};
-
-    #[inline(always)]
     pub fn empty_ident() -> TokenType {
-        TokenType::Identifier(TIdentifier::default())
+        TokenType::Identifier(TIdentifier::new("".to_string()))
     }
 }

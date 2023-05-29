@@ -117,7 +117,7 @@ impl Parser {
     #[track]
     fn let_decl(&mut self) -> Result<Stmt, String> {
         let name = self.consume(
-            &TokenType::Identifier(TIdentifier("".to_owned())),
+            &TokenType::Identifier(TIdentifier::new("".to_string())),
             "Expected variable name.",
         )?;
 
@@ -192,7 +192,7 @@ impl Parser {
     #[track]
     fn fn_def(&mut self) -> Result<Stmt, String> {
         let ident = self.consume(
-            &TokenType::Identifier(TIdentifier("".to_owned())),
+            &TokenType::Identifier(TIdentifier::new("".to_string())),
             "Expected function name",
         )?;
         let ident = if let TokenType::Identifier(ident) = &ident.t_type {
@@ -203,9 +203,9 @@ impl Parser {
 
         self.consume(&TokenType::LeftParen, "Expected '('")?;
         let mut params = vec![];
-        while self.check_n(&TokenType::Identifier(TIdentifier("".to_owned()))) {
+        while self.check_n(&TokenType::Identifier(TIdentifier::new("".to_string()))) {
             let param = self.consume(
-                &TokenType::Identifier(TIdentifier("".to_owned())),
+                &TokenType::Identifier(TIdentifier::new("".to_string())),
                 "Expected parameter name",
             )?;
             let param = if let TokenType::Identifier(param) = &param.t_type {
@@ -231,7 +231,7 @@ impl Parser {
     fn assignment_stmt(&mut self) -> Result<Stmt, String> {
         let name = self
             .consume(
-                &TokenType::Identifier(TIdentifier("".to_owned())),
+                &TokenType::Identifier(TIdentifier::new("".to_string())),
                 "Expected variable name.",
             )?
             .clone();
@@ -348,10 +348,10 @@ impl Parser {
     fn if_stmt(&mut self) -> Result<Stmt, String> {
         let expr = self.expression()?;
         self.consume(&LeftBrace, "Expected Block")?;
-        let if_block = Box::new(self.block()?);
+        let if_block = std::rc::Rc::new(self.block()?);
 
         let else_block = if self.match_t(&[Else]) {
-            Some(Box::new(self.statement()?))
+            Some(std::rc::Rc::new(self.statement()?))
         } else {
             None
         };

@@ -15,7 +15,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time;
 
-type EnvScope = Rc<Environment>;
+type EnvScope = Environment;
 
 use std::rc::Rc;
 
@@ -33,17 +33,16 @@ impl Default for InterpreterFlags {
 
 pub struct Interpreter {
     repl_mode: bool,
-    env: Rc<Environment>,
+    env: Environment,
     flags: InterpreterFlags,
     stop_signal: Arc<AtomicBool>,
 }
 
 impl Interpreter {
     pub fn new(repl_mode: bool, env: Environment, stop_signal: Arc<AtomicBool>) -> Self {
-        let env = Rc::new(env);
         Interpreter {
             repl_mode,
-            env: Rc::clone(&env),
+            env,
             flags: InterpreterFlags::default(),
             stop_signal,
         }
@@ -55,16 +54,14 @@ impl Interpreter {
         }
     }
 
+    #[inline(always)]
     fn push_env(&mut self) {
-        self.env = Rc::new(Environment::new_as_child(Rc::clone(&self.env)));
+        self.env.push_scope();
     }
 
+    #[inline(always)]
     fn pop_env(&mut self) {
-        self.env = Rc::get_mut(&mut self.env)
-            .unwrap()
-            .destroy()
-            .take()
-            .unwrap();
+        self.env.pop_scope();
     }
 
     #[inline(always)]
@@ -78,7 +75,7 @@ impl Interpreter {
         for stmt in statements {
             if let Stmt::Return(expr) = stmt {
                 let val = self.eval_expr(&expr);
-                self.flags.return_backtrack = true; 
+                self.flags.return_backtrack = true;
                 self.pop_env();
                 return val;
             } else {
@@ -93,7 +90,6 @@ impl Interpreter {
         LiteralType::Null
     }
 
-    #[inline(always)]
     fn execute_stmt(&mut self, stmt: &Stmt) -> LiteralType {
         match stmt {
             Stmt::ExprStmt(expr) => {
@@ -113,13 +109,11 @@ impl Interpreter {
                 LiteralType::Null
             }
             Stmt::Decl { id, expr } => {
-                if self.env.has_var(&id.0) && !self.repl_mode {
-                    panic!("Attempt to redeclare variable '{}'", id.0)
+                if self.env.has_var(&id.inner()) && !self.repl_mode {
+                    panic!("Attempt to redeclare variable '{}'", id.inner())
                 }
                 let value = self.evaluate(expr);
-                Rc::get_mut(&mut self.env)
-                    .unwrap()
-                    .define(id.0.clone(), EnvVal::Lt(Rc::new(value)));
+                self.env.define(Rc::clone(&id.0), EnvVal::Lt(Rc::new(value)));
                 LiteralType::Null
             }
             Stmt::Block(stmts) => self.exec_block(stmts),
@@ -129,7 +123,7 @@ impl Interpreter {
                 else_block: None,
             } => {
                 let condition = self.evaluate(expr);
-                let Stmt::Block(if_block) = *if_block.clone() else {unreachable!()};
+                let Stmt::Block(if_block) = if_block.as_ref() else {unreachable!()};
                 if Self::to_bool(condition) {
                     return self.exec_block(&if_block);
                 }
@@ -141,8 +135,8 @@ impl Interpreter {
                 else_block: Some(else_block),
             } => {
                 let condition = self.evaluate(expr);
-                let Stmt::Block(if_block) = *if_block.clone() else { unreachable!()};
-                let Stmt::Block(else_block) = *else_block.clone() else { unreachable!() };
+                let Stmt::Block(if_block) = if_block.as_ref() else { unreachable!()};
+                let Stmt::Block(else_block) = else_block.as_ref() else { unreachable!() };
                 if Self::to_bool(condition) {
                     self.exec_block(&if_block)
                 } else {
@@ -156,7 +150,7 @@ impl Interpreter {
                 updation,
                 body,
             } => {
-                self.env = Rc::new(Environment::new_as_child(Rc::clone(&self.env)));
+                self.push_env();
 
                 if let Some(init) = init {
                     self.execute_stmt(init);
@@ -191,18 +185,12 @@ impl Interpreter {
                     }
                 }
 
-                self.env = Rc::get_mut(&mut self.env)
-                    .unwrap()
-                    .destroy()
-                    .take()
-                    .unwrap();
+                self.pop_env();
                 LiteralType::Null
             }
             Stmt::Assignment { id, expr } => {
                 let value = self.evaluate(expr);
-                Rc::get_mut(&mut self.env)
-                    .unwrap()
-                    .update(&id.0, EnvVal::Lt(Rc::new(value)));
+                self.env.update(&id.0, EnvVal::Lt(Rc::new(value)));
                 LiteralType::Null
             }
             Stmt::FunctionDef {
@@ -211,8 +199,8 @@ impl Interpreter {
                 body,
             } => {
                 if let Stmt::Block(stmts) = *body.clone() {
-                    Rc::get_mut(&mut self.env).unwrap().define(
-                        ident.0.clone(),
+                    self.env.define(
+                        Rc::clone(&ident.0),
                         EnvVal::Fn(Rc::new(params.to_vec()), Rc::new(stmts)),
                     )
                 };
@@ -232,9 +220,11 @@ impl Interpreter {
                 right,
             } => self.eval_binary(left, operator, right),
             Expr::Literal(l) => l.to_owned(),
-            Expr::Variable(TIdentifier(name)) => match self.env.get(name) {
+            Expr::Variable(name) => match self.env.get(&name.0) {
                 EnvVal::Lt(literal) => literal.as_ref().clone(),
-                EnvVal::Fn(_, _) => LiteralType::Str(StrType::Strict(format!("[fun {name}]"))),
+                EnvVal::Fn(_, _) => {
+                    LiteralType::Str(StrType::Strict(format!("[fun {}]", name.0.as_ref())))
+                }
             },
             Expr::ArrayExpr(array) => {
                 let mut array_evaled = vec![];
@@ -253,34 +243,29 @@ impl Interpreter {
                 ),
             },
             Expr::FnCall(ident, args) => {
-                let fn_def = Rc::get_mut(&mut self.env).unwrap().get(&ident.0);
+                self.push_env();
+
+                let fn_def = self.env.get(&ident.0);
                 let (params, stmts) = if let EnvVal::Fn(params, stmts) = fn_def {
                     (Rc::clone(&params), Rc::clone(&stmts))
                 } else {
                     panic!("Cannot call a variable as a function")
                 };
 
-                self.env = Rc::new(Environment::new_as_child(Rc::clone(&self.env)));
                 for (i, param) in params.iter().enumerate() {
-                    let val = if let Some(val) = args.get(i) {
+                    if let Some(val) = args.get(i) {
                         let expr = self.eval_expr(val);
-                        EnvVal::Lt(Rc::new(expr))
-                    } else {
-                        EnvVal::Lt(Rc::new(LiteralType::Null))
-                    };
-                    Rc::get_mut(&mut self.env)
-                        .unwrap()
-                        .define(param.0.clone(), val)
+                        self.env.define(Rc::clone(&param.0), EnvVal::Lt(Rc::new(expr)));
+                        continue;
+                    } 
+                                            
+                    self.env.define(Rc::clone(&param.0), EnvVal::Lt(Rc::new(LiteralType::Null)));
                 }
 
                 let rt_val = self.exec_block(&stmts);
-                self.env = Rc::get_mut(&mut self.env)
-                    .unwrap()
-                    .destroy()
-                    .take()
-                    .unwrap();
-
                 self.flags.return_backtrack = false;
+
+                self.pop_env();
                 rt_val
             }
         }

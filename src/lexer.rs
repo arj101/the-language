@@ -5,26 +5,12 @@ use crate::tokens::{
 
 // use phf::phf_map;
 
-static KEYWORDS: phf::Map<&'static str, TokenType> = phf::phf_map! {
-    "and" => And,
-    "else" => Else,
-    "false" => False,
-    "for" => For,
-    "fun" => Fun,
-    "if" => If,
-    "null" => Null,
-    "or" => Or,
-    "print" => Print,
-    "return" => Return,
-    "this" => This,
-    "true" => True,
-    "let" => Let,
-    "while" => While,
-    "_time" => DebugTokenTime,
-};
+// static KEYWORDS: phf::Map<&'static str, TokenType> = phf::phf_map! ;
 
 pub struct Lexer {
+    keywords: rustc_hash::FxHashMap<String, TokenType>,
     source: Vec<char>,
+    source_str: String,
     tokens: Vec<Token>,
     start: usize,
     current: usize,
@@ -34,8 +20,38 @@ pub struct Lexer {
 
 impl Lexer {
     pub fn new(source: &str) -> Self {
+        let mut keywords = rustc_hash::FxHashMap::default();
+
+        macro_rules! insert {
+            ($($key:expr => $val:expr),* $(,)?) => {
+                $(
+                    keywords.insert($key.to_string(),$val);
+                )*
+            }
+        }
+
+        insert! {
+            "and" => And,
+            "else" => Else,
+            "false" => False,
+            "for" => For,
+            "fun" => Fun,
+            "if" => If,
+            "null" => Null,
+            "or" => Or,
+            "print" => Print,
+            "return" => Return,
+            "this" => This,
+            "true" => True,
+            "let" => Let,
+            "while" => While,
+            "_time" => DebugTokenTime,
+        };
+
         Self {
+            keywords,
             source: source.chars().collect(),
+            source_str: source.to_string(),
             tokens: vec![],
             start: 0,
             current: 0,
@@ -46,6 +62,7 @@ impl Lexer {
 
     pub fn reset(&mut self, source: &str) {
         self.source = source.chars().collect();
+        self.source_str = source.to_string();
         self.tokens.clear();
         self.start = 0;
         self.current = 0;
@@ -184,14 +201,12 @@ impl Lexer {
             self.advance();
         }
 
-        let text = self.source[self.start..self.current]
-            .iter()
-            .collect::<String>();
+        let text = &self.source_str[self.start..self.current];
 
-        let token = if let Some(t) = KEYWORDS.get(&text) {
+        let token = if let Some(t) = self.keywords.get(text) {
             t.clone()
         } else {
-            Identifier(TIdentifier(text))
+            Identifier(TIdentifier::new(text.to_string()))
         };
 
         self.add_token(token);
