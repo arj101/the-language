@@ -1,5 +1,5 @@
 use crate::{
-    expr::{LiteralType, Stmt, StrType},
+    expr::{BindedStmt, LiteralType, Stmt, StrType},
     tokens::TIdentifier,
 };
 use rustc_hash::FxHashMap;
@@ -10,7 +10,7 @@ use crate::println_raw;
 #[derive(Debug)]
 pub enum EnvVal {
     Lt(Rc<LiteralType>),
-    Fn(Rc<Vec<TIdentifier>>, Rc<Vec<Stmt>>),
+    Fn(Rc<Vec<TIdentifier>>, Rc<Vec<BindedStmt>>),
 }
 
 pub struct Environment {
@@ -83,7 +83,9 @@ impl Environment {
         }
 
         println_raw!("{}: no such variable in scope", name);
-        self.scopes[0].get(&Rc::new("undefined".to_string())).unwrap()
+        self.scopes[0]
+            .get(&Rc::new("undefined".to_string()))
+            .unwrap()
     }
 }
 

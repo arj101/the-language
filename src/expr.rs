@@ -1,7 +1,9 @@
+use crate::interpreter::Interpreter;
 use crate::tokens::TIdentifier;
 use crate::tokens::Token;
 use crate::tokens::TokenType;
 use rustc_hash::FxHashMap;
+use std::fmt::Debug;
 use std::rc::Rc;
 
 #[derive(Debug, Clone)]
@@ -49,8 +51,89 @@ pub enum Stmt {
     FunctionDef {
         ident: TIdentifier,
         params: Vec<TIdentifier>,
-        body: Box<Stmt>
+        body: Box<Stmt>,
     },
+}
+
+#[derive(Clone)]
+pub struct BindedStmt {
+    pub stmt: BindingStmt,
+    pub exec: fn(&mut Interpreter, &BindingStmt) -> LiteralType,
+}
+
+impl Debug for BindedStmt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BindedStmt")
+            .field("stmt", &self.stmt)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct BindedExpr {
+    pub expr: BindingExpr,
+    pub exec: fn(&mut Interpreter, &BindingExpr) -> LiteralType,
+}
+
+impl Debug for BindedExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BindedStmt")
+            .field("stmt", &self.expr)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum BindingStmt {
+    ExprStmt(BindedExpr),
+    Print(BindedExpr),
+    Decl {
+        id: TIdentifier,
+        expr: BindedExpr,
+    },
+    Assignment {
+        id: TIdentifier,
+        expr: BindedExpr,
+    },
+    Block(Vec<BindedStmt>),
+    // move the below into Expr after implementing `return`
+    Return(BindedExpr),
+    If {
+        expr: BindedExpr,
+        if_block: Rc<BindedStmt>,
+        else_block: Option<Rc<BindedStmt>>,
+    },
+    Loop {
+        entry_controlled: bool,
+        init: Option<Box<BindedStmt>>,
+        expr: BindedExpr,
+        updation: Option<Box<BindedStmt>>,
+        body: Box<BindedStmt>,
+    },
+    FunctionDef {
+        ident: TIdentifier,
+        params: Vec<TIdentifier>,
+        body: Box<BindedStmt>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum BindingExpr {
+    Grouping(Box<BindedExpr>),
+    Binary {
+        left: Box<BindedExpr>,
+        operator: Token,
+        right: Box<BindedExpr>,
+    },
+    Unary {
+        operator: Token,
+        right: Box<BindedExpr>,
+    },
+    Variable(TIdentifier),
+    Literal(LiteralType),
+    FnCall(TIdentifier, Vec<BindedExpr>),
+    DebugVariable(DebugVariable),
+    ArrayExpr(Vec<BindedExpr>),
 }
 
 #[derive(Debug, Clone)]

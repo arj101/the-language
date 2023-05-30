@@ -3,6 +3,10 @@ use syn::token::Fn;
 
 use crate::environment::EnvVal;
 use crate::environment::Environment;
+use crate::expr::BindedExpr;
+use crate::expr::BindedStmt;
+use crate::expr::BindingExpr;
+use crate::expr::BindingStmt;
 use crate::expr::DebugVariable;
 use crate::expr::{Expr, LiteralType, Stmt, StrType};
 use crate::repl;
@@ -113,7 +117,8 @@ impl Interpreter {
                     panic!("Attempt to redeclare variable '{}'", id.inner())
                 }
                 let value = self.evaluate(expr);
-                self.env.define(Rc::clone(&id.0), EnvVal::Lt(Rc::new(value)));
+                self.env
+                    .define(Rc::clone(&id.0), EnvVal::Lt(Rc::new(value)));
                 LiteralType::Null
             }
             Stmt::Block(stmts) => self.exec_block(stmts),
@@ -201,12 +206,422 @@ impl Interpreter {
                 if let Stmt::Block(stmts) = *body.clone() {
                     self.env.define(
                         Rc::clone(&ident.0),
-                        EnvVal::Fn(Rc::new(params.to_vec()), Rc::new(stmts)),
+                        EnvVal::Fn(
+                            Rc::new(params.to_vec()),
+                            Rc::new(stmts.iter().map(Self::bind).collect()),
+                        ),
                     )
                 };
                 LiteralType::Null
             }
             Stmt::Return(_) => panic!("Unexpected 'return' statement"),
+        }
+    }
+
+    fn exec_binded_expr(&mut self, expr: &BindingStmt) -> LiteralType {
+        let BindingStmt::ExprStmt(expr) = expr else { unreachable!() };
+
+        let eval_result = (expr.exec)(self, &expr.expr);
+        if self.repl_mode {
+            pretty_print_literal(eval_result)
+        }
+
+        LiteralType::Null
+    }
+
+    fn exec_binded_print(&mut self, stmt: &BindingStmt) -> LiteralType {
+        let BindingStmt::Print(expr) = stmt else { unreachable!() };
+
+        let eval_result = (expr.exec)(self, &expr.expr);
+        if self.repl_mode {
+            pretty_print_literal(eval_result);
+        } else {
+            print_literal(eval_result)
+        }
+
+        LiteralType::Null
+    }
+
+    fn exec_binded_decl(&mut self, decl: &BindingStmt) -> LiteralType {
+        let BindingStmt::Decl { id, expr } = decl else { unreachable!() };
+
+        if self.env.has_var(&id.inner()) && !self.repl_mode {
+            panic!("Attempt to redeclare variable '{}'", id.inner())
+        }
+        let value = (expr.exec)(self, &expr.expr);
+        self.env
+            .define(Rc::clone(&id.0), EnvVal::Lt(Rc::new(value)));
+        LiteralType::Null
+    }
+
+    fn exec_binded_block(&mut self, block: &BindingStmt) -> LiteralType {
+        let BindingStmt::Block(stmts) = block else { unreachable!() };
+
+        Self::exec_binded(self, stmts)
+    }
+
+    fn exec_binded_if(&mut self, stmt: &BindingStmt) -> LiteralType {
+        let BindingStmt::If { expr, if_block, .. } = stmt else { unreachable!() };
+
+        let condition = (expr.exec)(self, &expr.expr);
+        let BindingStmt::Block(if_block) = &if_block.stmt else {unreachable!()};
+        if Self::to_bool(condition) {
+            return self.exec_binded(&if_block);
+        }
+
+        LiteralType::Null
+    }
+
+    fn exec_binded_if_else(&mut self, stmt: &BindingStmt) -> LiteralType {
+        let BindingStmt::If { expr, if_block, else_block: Some(else_block) } = stmt else { unreachable!() };
+
+        let condition = (expr.exec)(self, &expr.expr);
+        let BindingStmt::Block(if_block) = &if_block.stmt else { unreachable!()};
+        let BindingStmt::Block(else_block) = &else_block.stmt else { unreachable!() };
+
+        if Self::to_bool(condition) {
+            self.exec_binded(&if_block)
+        } else {
+            self.exec_binded(&else_block)
+        }
+    }
+
+    fn exec_binded_loop(&mut self, stmt: &BindingStmt) -> LiteralType {
+        let BindingStmt::Loop { entry_controlled, init, expr: condition, updation, body } = stmt else { unreachable!() };
+
+        self.push_env();
+
+        if let Some(init) = init {
+            (init.exec)(self, &init.stmt);
+        }
+
+        if !entry_controlled {
+            (body.exec)(self, &body.stmt);
+        }
+
+        let mut rt_val;
+        //to avoid checking for updation statement inside the loop
+        if let Some(updation) = &updation {
+            while let LiteralType::Bool(true) = (condition.exec)(self, &condition.expr) {
+                rt_val = (body.exec)(self, &body.stmt);
+                if self.flags.return_backtrack
+                    || self.stop_signal.load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    self.pop_env();
+                    return rt_val;
+                }
+                (updation.exec)(self, &updation.stmt);
+            }
+        } else {
+            while let LiteralType::Bool(true) = (condition.exec)(self, &condition.expr) {
+                rt_val = (body.exec)(self, &body.stmt);
+                if self.flags.return_backtrack
+                    || self.stop_signal.load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    self.pop_env();
+                    return rt_val;
+                }
+            }
+        }
+
+        self.pop_env();
+        LiteralType::Null
+    }
+
+    fn exec_binded_assignment(&mut self, stmt: &BindingStmt) -> LiteralType {
+        let BindingStmt::Assignment { id, expr } = stmt else { unreachable!() };
+
+        let value = (expr.exec)(self, &expr.expr);
+        self.env.update(&id.0, EnvVal::Lt(Rc::new(value)));
+
+        LiteralType::Null
+    }
+
+    fn exec_binded_fn_def(&mut self, stmt: &BindingStmt) -> LiteralType {
+        let BindingStmt::FunctionDef { ident, params, body } = stmt else { unreachable!() };
+
+        if let BindingStmt::Block(stmts) = &body.stmt {
+            self.env.define(
+                Rc::clone(&ident.0),
+                EnvVal::Fn(Rc::new(params.to_vec()), Rc::new(stmts.to_vec())),
+            )
+        };
+        LiteralType::Null
+    }
+
+    fn exec_binded_return(&mut self, stmt: &BindingStmt) -> LiteralType {
+        let BindingStmt::Return(val) = stmt else { unreachable!() };
+
+        self.flags.return_backtrack = true;
+        (val.exec)(self, &val.expr)
+    }
+
+    fn eval(&mut self, _: &BindingExpr) -> LiteralType {
+        LiteralType::Null
+    }
+
+    fn eval2(&mut self, _: &BindingStmt) -> LiteralType {
+        LiteralType::Null
+    }
+
+    fn bind(stmt: &Stmt) -> BindedStmt {
+        macro_rules! bind {
+            ($stmt:expr => $f:ident) => {
+                BindedStmt {
+                    stmt: $stmt,
+                    exec: Self::$f,
+                }
+            };
+        }
+
+        match stmt {
+            Stmt::Block(stmts) => BindedStmt {
+                stmt: BindingStmt::Block(stmts.iter().map(Self::bind).collect()),
+                exec: Self::exec_binded_block,
+            },
+            Stmt::ExprStmt(expr) => {
+                bind!(BindingStmt::ExprStmt(Self::bind_expr(expr)) => exec_binded_expr)
+            }
+            Stmt::Print(expr) => {
+                bind!(BindingStmt::Print(Self::bind_expr(expr)) => exec_binded_print)
+            }
+            Stmt::Decl { id, expr } => {
+                bind!(BindingStmt::Decl{id: id.clone(), expr: Self::bind_expr(expr)} => exec_binded_decl)
+            }
+            Stmt::If {
+                expr,
+                if_block,
+                else_block: None,
+            } => {
+                bind!(BindingStmt::If{expr: Self::bind_expr(expr), if_block: Rc::new(Self::bind(if_block)), else_block:None} => exec_binded_if)
+            }
+            Stmt::If {
+                expr,
+                if_block,
+                else_block: Some(else_block),
+            } => {
+                bind!(BindingStmt::If{expr: Self::bind_expr(expr), if_block: Rc::new(Self::bind(if_block)), else_block: Some(Rc::new(Self::bind(else_block)))} => exec_binded_if)
+            }
+            Stmt::Loop {
+                entry_controlled,
+                init,
+                expr,
+                updation,
+                body,
+            } => bind!( BindingStmt::Loop{
+            entry_controlled: *entry_controlled,
+            init: init.map(|init| Box::new(Self::bind(init.as_ref()))), expr: Self::bind_expr(expr), updation: updation.map(|updation| Box::new(Self::bind(updation.as_ref()))), body: Box::new(Self::bind(body))} => exec_binded_loop),
+            _ => unreachable!(),
+        }
+    }
+
+    fn eval_binded_literal(&mut self, lt: &BindingExpr) -> LiteralType {
+        let BindingExpr::Literal(lt) = lt else { unreachable!() };
+        lt.clone()
+    }
+
+    fn eval_binded_binary(&mut self, binary: &BindingExpr) -> LiteralType {
+        let BindingExpr::Binary { left, operator, right } = binary else { unreachable!() };
+
+        let mut left = (left.exec)(self, &left.expr);
+        let mut right = (right.exec)(self, &right.expr);
+
+        match (&left, &right) {
+            (LiteralType::Number(_), LiteralType::Str(StrType::Loose(s))) => {
+                if let Ok(n) = s.parse::<f64>() {
+                    right = LiteralType::Number(n)
+                }
+            }
+            (LiteralType::Str(StrType::Loose(s)), LiteralType::Number(_)) => {
+                if let Ok(n) = s.parse::<f64>() {
+                    left = LiteralType::Number(n)
+                }
+            }
+            (LiteralType::Number(_), LiteralType::Bool(b)) => {
+                right = LiteralType::Number(Self::bool_to_number(*b))
+            }
+            (LiteralType::Bool(b), LiteralType::Number(_)) => {
+                left = LiteralType::Number(Self::bool_to_number(*b))
+            }
+            _ => (),
+        }
+
+        macro_rules! eval {
+            ($( $token:pat => $function:ident ),* $(,)?) => {
+                match operator.t_type {
+                    $(
+                         $token => Self::$function(left, right),
+                     )*
+                    _ => unreachable!()
+                }
+            };
+        }
+
+        use TokenType::*;
+        eval! {
+            Plus => addition,
+            Minus => subtraction,
+            Slash => division,
+            Star => multiplication,
+            StarStar => exponentiation,
+            EqualEqual => equal,
+            BangEqual => not_equal,
+            Greater => greater,
+            GreaterEqual => greater_equal,
+            Less => less,
+            LessEqual => less_equal,
+            Percentage => modulus,
+        }
+    }
+
+    fn eval_binded_unary(&mut self, unary: &BindingExpr) -> LiteralType {
+        let BindingExpr::Unary { operator, right } = unary else { unreachable!() };
+        let right = (right.exec)(self, &right.expr);
+        let rt = match operator.t_type {
+            TokenType::Minus => {
+                let right = if let LiteralType::Number(n) = right {
+                    n
+                } else {
+                    std::f64::NAN
+                };
+                LiteralType::Number(-right)
+            }
+            TokenType::Bang => match right {
+                LiteralType::Bool(b) => LiteralType::Bool(!b),
+                LiteralType::Number(n) => LiteralType::Bool(Self::number_to_bool(n)),
+                LiteralType::Null => LiteralType::Bool(true),
+                LiteralType::Str(s) => {
+                    let s = Self::str_type_inner_ref(&s);
+                    if s.is_empty() {
+                        LiteralType::Bool(true)
+                    } else {
+                        LiteralType::Bool(false)
+                    }
+                }
+                LiteralType::Array(a) => LiteralType::Bool(!a.is_empty()),
+            },
+            _ => unreachable!(),
+        };
+        rt
+    }
+
+    fn eval_binded_fn_call(&mut self, fn_call: &BindingExpr) -> LiteralType {
+        let BindingExpr::FnCall(ident, args) = fn_call else { unreachable!() };
+        self.push_env();
+
+        let fn_def = self.env.get(&ident.0);
+        let (params, stmts) = if let EnvVal::Fn(params, stmts) = fn_def {
+            (Rc::clone(&params), Rc::clone(&stmts))
+        } else {
+            panic!("Cannot call a variable as a function")
+        };
+
+        for (i, param) in params.iter().enumerate() {
+            if let Some(val) = args.get(i) {
+                let expr = (val.exec)(self, &val.expr);
+                self.env
+                    .define(Rc::clone(&param.0), EnvVal::Lt(Rc::new(expr)));
+                continue;
+            }
+
+            self.env
+                .define(Rc::clone(&param.0), EnvVal::Lt(Rc::new(LiteralType::Null)));
+        }
+
+        let rt_val = self.exec_binded(&stmts);
+        self.flags.return_backtrack = false;
+
+        self.pop_env();
+        rt_val
+    }
+
+    fn eval_binded_var(&mut self, var: &BindingExpr) -> LiteralType {
+        let BindingExpr::Variable(ident) = var else { unreachable!() };
+
+        match self.env.get(&ident.0) {
+            EnvVal::Lt(literal) => literal.as_ref().clone(),
+            EnvVal::Fn(_, _) => {
+                LiteralType::Str(StrType::Strict(format!("[fun {}]", ident.0.as_ref())))
+            }
+        }
+    }
+
+    fn eval_binded_array(&mut self, array: &BindingExpr) -> LiteralType {
+        let BindingExpr::ArrayExpr(array) = array else { unreachable!() };
+
+        let mut evaled_array = vec![];
+        for expr in array {
+            evaled_array.push((expr.exec)(self, &expr.expr))
+        }
+
+        LiteralType::Array(Rc::new(evaled_array))
+    }
+
+    fn eval_binded_debug_var(&mut self, var: &BindingExpr) -> LiteralType {
+        let BindingExpr::DebugVariable(var) = var else { unreachable!() };
+
+        match var {
+            DebugVariable::Time => LiteralType::Number(
+                time::SystemTime::now()
+                    .duration_since(time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs_f64(),
+            ),
+        }
+    }
+
+    fn bind_expr(expr: &Expr) -> BindedExpr {
+        match expr {
+            Expr::Literal(lt) => BindedExpr {
+                expr: BindingExpr::Literal(lt.clone()),
+                exec: Self::eval_binded_literal,
+            },
+
+            Expr::Grouping(expr) => Self::bind_expr(expr),
+
+            Expr::Unary { operator, right } => BindedExpr {
+                expr: BindingExpr::Unary {
+                    operator: operator.clone(),
+                    right: Box::new(Self::bind_expr(right)),
+                },
+                exec: Self::eval_binded_unary,
+            },
+
+            Expr::Binary {
+                left,
+                operator,
+                right,
+            } => BindedExpr {
+                expr: BindingExpr::Binary {
+                    left: Box::new(Self::bind_expr(left)),
+                    operator: operator.clone(),
+                    right: Box::new(Self::bind_expr(right)),
+                },
+                exec: Self::eval_binded_binary,
+            },
+
+            Expr::FnCall(ident, params) => BindedExpr {
+                expr: BindingExpr::FnCall(
+                    ident.clone(),
+                    params.iter().map(Self::bind_expr).collect(),
+                ),
+                exec: Self::eval_binded_fn_call,
+            },
+
+            Expr::Variable(ident) => BindedExpr {
+                expr: BindingExpr::Variable(ident.clone()),
+                exec: Self::eval_binded_var,
+            },
+
+            Expr::ArrayExpr(arr) => BindedExpr {
+                expr: BindingExpr::ArrayExpr(arr.iter().map(Self::bind_expr).collect()),
+                exec: Self::eval_binded_array,
+            },
+
+            Expr::DebugVariable(debug_var) => BindedExpr {
+                expr: BindingExpr::DebugVariable(debug_var.clone()),
+                exec: Self::eval_binded_debug_var,
+            },
         }
     }
 
@@ -255,20 +670,39 @@ impl Interpreter {
                 for (i, param) in params.iter().enumerate() {
                     if let Some(val) = args.get(i) {
                         let expr = self.eval_expr(val);
-                        self.env.define(Rc::clone(&param.0), EnvVal::Lt(Rc::new(expr)));
+                        self.env
+                            .define(Rc::clone(&param.0), EnvVal::Lt(Rc::new(expr)));
                         continue;
-                    } 
-                                            
-                    self.env.define(Rc::clone(&param.0), EnvVal::Lt(Rc::new(LiteralType::Null)));
+                    }
+
+                    self.env
+                        .define(Rc::clone(&param.0), EnvVal::Lt(Rc::new(LiteralType::Null)));
                 }
 
-                let rt_val = self.exec_block(&stmts);
+                let rt_val = self.exec_binded(&stmts);
                 self.flags.return_backtrack = false;
 
                 self.pop_env();
                 rt_val
             }
         }
+    }
+
+    fn exec_binded(&mut self, stmts: &[BindedStmt]) -> LiteralType {
+        self.push_env();
+
+        let mut rt_val = LiteralType::Null;
+
+        for stmt in stmts {
+            rt_val = (stmt.exec)(self, &stmt.stmt);
+            if self.flags.return_backtrack {
+                self.pop_env();
+                return rt_val;
+            }
+        }
+
+        self.pop_env();
+        rt_val
     }
 
     fn eval_binary(&mut self, left: &Expr, operator: &Token, right: &Expr) -> LiteralType {
