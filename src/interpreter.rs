@@ -1,4 +1,3 @@
-use quote::__private::Literal;
 use syn::token::Fn;
 
 use crate::environment::EnvVal;
@@ -352,8 +351,9 @@ impl Interpreter {
     fn exec_binded_return(&mut self, stmt: &BindingStmt) -> LiteralType {
         let BindingStmt::Return(val) = stmt else { unreachable!() };
 
+        let rt_val = (val.exec)(self, &val.expr);
         self.flags.return_backtrack = true;
-        (val.exec)(self, &val.expr)
+        rt_val
     }
 
     fn eval(&mut self, _: &BindingExpr) -> LiteralType {
@@ -400,7 +400,7 @@ impl Interpreter {
                 if_block,
                 else_block: Some(else_block),
             } => {
-                bind!(BindingStmt::If{expr: Self::bind_expr(expr), if_block: Rc::new(Self::bind(if_block)), else_block: Some(Rc::new(Self::bind(else_block)))} => exec_binded_if)
+                bind!(BindingStmt::If{expr: Self::bind_expr(expr), if_block: Rc::new(Self::bind(if_block)), else_block: Some(Rc::new(Self::bind(else_block)))} => exec_binded_if_else)
             }
             Stmt::Loop {
                 entry_controlled,
@@ -410,7 +410,21 @@ impl Interpreter {
                 body,
             } => bind!( BindingStmt::Loop{
             entry_controlled: *entry_controlled,
-            init: init.map(|init| Box::new(Self::bind(init.as_ref()))), expr: Self::bind_expr(expr), updation: updation.map(|updation| Box::new(Self::bind(updation.as_ref()))), body: Box::new(Self::bind(body))} => exec_binded_loop),
+            init: init.clone().map(|init| Box::new(Self::bind(init.as_ref()))), expr: Self::bind_expr(expr), updation: updation.clone().map(|updation| Box::new(Self::bind(updation.as_ref()))), body: Box::new(Self::bind(body))} => exec_binded_loop),
+
+            Stmt::Assignment { id, expr } => {
+                bind!( BindingStmt::Assignment { id: id.clone(), expr: Self::bind_expr(expr) } => exec_binded_assignment)
+            }
+
+            Stmt::FunctionDef {
+                ident,
+                params,
+                body,
+            } => bind!(
+            BindingStmt::FunctionDef { ident: ident.clone(), params: params.clone(), body: Box::new(Self::bind(body)) } => exec_binded_fn_def ),
+
+            Stmt::Return(expr) => bind!(BindingStmt::Return(Self::bind_expr(expr)) => exec_binded_return ),
+
             _ => unreachable!(),
         }
     }
@@ -702,7 +716,7 @@ impl Interpreter {
         }
 
         self.pop_env();
-        rt_val
+        LiteralType::Null
     }
 
     fn eval_binary(&mut self, left: &Expr, operator: &Token, right: &Expr) -> LiteralType {
