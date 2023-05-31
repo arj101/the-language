@@ -495,9 +495,10 @@ impl Parser {
         }
 
         if self.match_t(&[StrStrict(String::new()), StrLoose(String::new())]) {
+            use std::rc::Rc;
             return match &self.previous().t_type {
-                StrStrict(s) => Ok(Expr::Literal(LiteralType::Str(StrType::Strict(s.clone())))),
-                StrLoose(s) => Ok(Expr::Literal(LiteralType::Str(StrType::Loose(s.clone())))),
+                StrStrict(s) => Ok(Expr::Literal(LiteralType::Str(StrType::Strict(Rc::new(s.clone()))))),
+                StrLoose(s) => Ok(Expr::Literal(LiteralType::Str(StrType::Loose(Rc::new(s.clone()))))),
                 _ => unreachable!(),
             };
         }

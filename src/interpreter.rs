@@ -117,7 +117,7 @@ impl Interpreter {
                 }
                 let value = self.evaluate(expr);
                 self.env
-                    .define(Rc::clone(&id.0), EnvVal::Lt(Rc::new(value)));
+                    .define(Rc::clone(&id.0), EnvVal::Lt(value));
                 LiteralType::Null
             }
             Stmt::Block(stmts) => self.exec_block(stmts),
@@ -194,7 +194,7 @@ impl Interpreter {
             }
             Stmt::Assignment { id, expr } => {
                 let value = self.evaluate(expr);
-                self.env.update(&id.0, EnvVal::Lt(Rc::new(value)));
+                self.env.update(&id.0, EnvVal::Lt(value));
                 LiteralType::Null
             }
             Stmt::FunctionDef {
@@ -249,7 +249,7 @@ impl Interpreter {
         }
         let value = (expr.exec)(self, &expr.expr);
         self.env
-            .define(Rc::clone(&id.0), EnvVal::Lt(Rc::new(value)));
+            .define(Rc::clone(&id.0), EnvVal::Lt(value));
         LiteralType::Null
     }
 
@@ -331,7 +331,7 @@ impl Interpreter {
         let BindingStmt::Assignment { id, expr } = stmt else { unreachable!() };
 
         let value = (expr.exec)(self, &expr.expr);
-        self.env.update(&id.0, EnvVal::Lt(Rc::new(value)));
+        self.env.update(&id.0, EnvVal::Lt(value));
 
         LiteralType::Null
     }
@@ -534,12 +534,12 @@ impl Interpreter {
             if let Some(val) = args.get(i) {
                 let expr = (val.exec)(self, &val.expr);
                 self.env
-                    .define(Rc::clone(&param.0), EnvVal::Lt(Rc::new(expr)));
+                    .define(Rc::clone(&param.0), EnvVal::Lt((expr)));
                 continue;
             }
 
             self.env
-                .define(Rc::clone(&param.0), EnvVal::Lt(Rc::new(LiteralType::Null)));
+                .define(Rc::clone(&param.0), EnvVal::Lt((LiteralType::Null)));
         }
 
         let rt_val = self.exec_binded(&stmts);
@@ -553,9 +553,9 @@ impl Interpreter {
         let BindingExpr::Variable(ident) = var else { unreachable!() };
 
         match self.env.get(&ident.0) {
-            EnvVal::Lt(literal) => literal.as_ref().clone(),
+            EnvVal::Lt(literal) => literal.clone(),
             EnvVal::Fn(_, _) => {
-                LiteralType::Str(StrType::Strict(format!("[fun {}]", ident.0.as_ref())))
+                LiteralType::Str(StrType::Strict(Rc::new(format!("[fun {}]", ident.0.as_ref()))))
             }
         }
     }
@@ -650,9 +650,9 @@ impl Interpreter {
             } => self.eval_binary(left, operator, right),
             Expr::Literal(l) => l.to_owned(),
             Expr::Variable(name) => match self.env.get(&name.0) {
-                EnvVal::Lt(literal) => literal.as_ref().clone(),
+                EnvVal::Lt(literal) => literal.clone(),
                 EnvVal::Fn(_, _) => {
-                    LiteralType::Str(StrType::Strict(format!("[fun {}]", name.0.as_ref())))
+                    LiteralType::Str(StrType::Strict(Rc::new(format!("[fun {}]", name.0.as_ref()))))
                 }
             },
             Expr::ArrayExpr(array) => {
@@ -685,12 +685,12 @@ impl Interpreter {
                     if let Some(val) = args.get(i) {
                         let expr = self.eval_expr(val);
                         self.env
-                            .define(Rc::clone(&param.0), EnvVal::Lt(Rc::new(expr)));
+                            .define(Rc::clone(&param.0), EnvVal::Lt((expr)));
                         continue;
                     }
 
                     self.env
-                        .define(Rc::clone(&param.0), EnvVal::Lt(Rc::new(LiteralType::Null)));
+                        .define(Rc::clone(&param.0), EnvVal::Lt((LiteralType::Null)));
                 }
 
                 let rt_val = self.exec_binded(&stmts);
@@ -900,8 +900,8 @@ impl Interpreter {
     fn str_multiplication(left: StrType, n: f64) -> StrType {
         let n = n.floor() as usize;
         match left {
-            StrType::Loose(s) => StrType::Loose(s.repeat(n)),
-            StrType::Strict(s) => StrType::Strict(s.repeat(n)),
+            StrType::Loose(s) => StrType::Loose(Rc::new(s.repeat(n))),
+            StrType::Strict(s) => StrType::Strict(Rc::new(s.repeat(n))),
         }
     }
 
@@ -920,9 +920,9 @@ impl Interpreter {
                             .map(|c| {
                                 let s = c.iter().collect::<String>();
                                 if strict_string {
-                                    LiteralType::Str(StrType::Strict(s))
+                                    LiteralType::Str(StrType::Strict(Rc::new(s)))
                                 } else {
-                                    LiteralType::Str(StrType::Loose(s))
+                                    LiteralType::Str(StrType::Loose(Rc::new(s)))
                                 }
                             })
                             .collect::<Vec<LiteralType>>(),
@@ -930,8 +930,8 @@ impl Interpreter {
                 };
 
                 match s {
-                    StrType::Loose(s) => create_chunks(s, false),
-                    StrType::Strict(s) => create_chunks(s, true),
+                    StrType::Loose(s) => create_chunks(s.to_string(), false),
+                    StrType::Strict(s) => create_chunks(s.to_string(), true),
                 }
             }
             _ => LiteralType::Number(std::f64::NAN),
@@ -986,10 +986,10 @@ impl Interpreter {
                 LiteralType::Number(Self::bool_to_number(*b0) + Self::bool_to_number(*b1))
             }
             (LiteralType::Str(StrType::Loose(s)), _left) => {
-                LiteralType::Str(StrType::Loose(s.to_owned() + &Self::literal_to_str(right)))
+                LiteralType::Str(StrType::Loose(Rc::new(s.to_string() + &Self::literal_to_str(right))))
             }
             (_right, LiteralType::Str(StrType::Loose(s))) => {
-                LiteralType::Str(StrType::Loose(Self::literal_to_str(left) + s))
+                LiteralType::Str(StrType::Loose(Rc::new(Self::literal_to_str(left) + &s)))
             }
             (LiteralType::Str(StrType::Strict(_)), _)
             | (_, LiteralType::Str(StrType::Strict(_))) => LiteralType::Number(std::f64::NAN),
@@ -1011,9 +1011,9 @@ impl Interpreter {
     fn str_addition(s0: StrType, s1: &StrType) -> StrType {
         match (&s0, s1) {
             (StrType::Strict(_), _) | (_, StrType::Strict(_)) => {
-                StrType::Strict(Self::str_type_inner(s0) + Self::str_type_inner_ref(s1))
+                StrType::Strict(Rc::new(Self::str_type_inner(s0) + Self::str_type_inner_ref(s1)))
             }
-            _ => StrType::Loose(Self::str_type_inner(s0) + Self::str_type_inner_ref(s1)),
+            _ => StrType::Loose(Rc::new(Self::str_type_inner(s0) + Self::str_type_inner_ref(s1))),
         }
     }
 
@@ -1114,7 +1114,7 @@ impl Interpreter {
     #[inline(always)]
     fn str_type_inner(s: StrType) -> String {
         let (StrType::Loose(s) | StrType::Strict(s)) = s;
-        s
+        s.to_string()
     }
 
     #[inline(always)]

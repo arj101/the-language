@@ -9,7 +9,7 @@ use crate::println_raw;
 
 #[derive(Debug)]
 pub enum EnvVal {
-    Lt(Rc<LiteralType>),
+    Lt(LiteralType),
     Fn(Rc<Vec<TIdentifier>>, Rc<Vec<BindedStmt>>),
 }
 
@@ -26,29 +26,29 @@ impl Environment {
         }
     }
 
+    #[inline]
     pub fn define(&mut self, name: Rc<String>, value: EnvVal) {
         self.scopes[self.curr_scope].insert(name, value);
     }
 
+    #[inline]
     pub fn has_var(&self, name: &Rc<String>) -> bool {
         self.scopes[self.curr_scope].contains_key(name)
     }
 
+    #[inline(always)]
     pub fn push_scope(&mut self) {
         self.scopes.push(FxHashMap::default());
         self.curr_scope = self.scopes.len() - 1;
     }
 
-    pub fn pop_scope(&mut self) -> Result<(), ()> {
-        if self.curr_scope <= 0 {
-            println_raw!("cannot pop out of global scope");
-            return Err(());
-        }
+    #[inline(always)]
+    pub fn pop_scope(&mut self) {
         self.scopes.pop();
         self.curr_scope -= 1;
-        Ok(())
     }
 
+    #[inline]
     pub fn update(&mut self, name: &Rc<String>, value: EnvVal) {
         if let Some(old_val) = self.scopes[self.curr_scope].get_mut(name) {
             *old_val = value;
@@ -68,6 +68,8 @@ impl Environment {
         println_raw!("{}: no such variable in scope", name);
     }
 
+
+    #[inline]
     pub fn get(&self, name: &Rc<String>) -> &EnvVal {
         if let Some(val) = self.scopes[self.curr_scope].get(name) {
             return val;
@@ -89,9 +91,10 @@ impl Environment {
     }
 }
 
+#[inline(always)]
 pub fn env_val_to_literal(env_val: &EnvVal) -> LiteralType {
     match env_val {
-        EnvVal::Lt(literal) => Rc::as_ref(literal).clone(),
-        EnvVal::Fn(..) => LiteralType::Str(StrType::Strict("[fn]".to_owned())),
+        EnvVal::Lt(literal) => literal.clone(),
+        EnvVal::Fn(..) => LiteralType::Str(StrType::Strict(Rc::new("[fn]".to_owned()))),
     }
 }

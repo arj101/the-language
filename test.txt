@@ -1,6 +1,5 @@
 
 
-fun main() {
 fun fib(a) {
    if a <= 1 { return 1 }
 
@@ -8,19 +7,6 @@ fun fib(a) {
 }
 
 
-let startTime = _time;
-print 'fibonacci(4) = ' + fib(4)
-print 'took: ' + (_time - startTime)*1000 + 'ms'
-print '' 
 
-startTime = _time;
-print 'fibonacci(20) = ' + fib(20)
-print 'took: ' + (_time - startTime)*1000 + 'ms'
-print  ''
+print  fib(30)
 
-startTime = _time;
-print 'fibonacci(30) = ' + fib(30)
-print 'took: ' + (_time - startTime)*1000 + 'ms'
-}
-
-main()

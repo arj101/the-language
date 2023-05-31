@@ -8,11 +8,11 @@ use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub enum StrType {
-    Strict(String),
-    Loose(String),
+    Strict(Rc<String>),
+    Loose(Rc<String>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug,  Clone)]
 pub enum LiteralType {
     Number(f64),
     Str(StrType),
