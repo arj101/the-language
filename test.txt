@@ -6,7 +6,5 @@ fun fib(a) {
    return fib(a-1) + fib(a-2);
 }
 
-
-
-print  fib(30)
+print fib(30);
 

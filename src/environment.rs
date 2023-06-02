@@ -10,7 +10,7 @@ use crate::println_raw;
 #[derive(Debug)]
 pub enum EnvVal {
     Lt(LiteralType),
-    Fn(Rc<Vec<TIdentifier>>, Rc<Vec<BindedStmt>>),
+    Fn(Rc<(Vec<TIdentifier>, Vec<BindedStmt>)>),
 }
 
 pub struct Environment {
@@ -26,7 +26,7 @@ impl Environment {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn define(&mut self, name: Rc<String>, value: EnvVal) {
         self.scopes[self.curr_scope].insert(name, value);
     }
@@ -48,7 +48,7 @@ impl Environment {
         self.curr_scope -= 1;
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn update(&mut self, name: &Rc<String>, value: EnvVal) {
         if let Some(old_val) = self.scopes[self.curr_scope].get_mut(name) {
             *old_val = value;
@@ -68,8 +68,7 @@ impl Environment {
         println_raw!("{}: no such variable in scope", name);
     }
 
-
-    #[inline]
+    #[inline(always)]
     pub fn get(&self, name: &Rc<String>) -> &EnvVal {
         if let Some(val) = self.scopes[self.curr_scope].get(name) {
             return val;

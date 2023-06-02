@@ -116,7 +116,8 @@ impl Interpreter {
                     panic!("Attempt to redeclare variable '{}'", id.inner())
                 }
                 let value = self.evaluate(expr);
-                self.env.define(Rc::clone(&id.0), EnvVal::Lt(value));
+                self.env
+                    .define(Rc::clone(&id.0), EnvVal::Lt(value));
                 LiteralType::Null
             }
             Stmt::Block(stmts) => self.exec_block(stmts),
@@ -204,11 +205,8 @@ impl Interpreter {
                 if let Stmt::Block(stmts) = *body.clone() {
                     self.env.define(
                         Rc::clone(&ident.0),
-                        EnvVal::Fn(Rc::new((
-                            params.to_vec(),
-                            stmts.iter().map(Self::bind).collect(),
-                        ))),
-                    )
+                        EnvVal::Fn(Rc::new((params.to_vec(),
+                            stmts.iter().map(Self::bind).collect()))))
                 };
                 LiteralType::Null
             }
@@ -247,7 +245,8 @@ impl Interpreter {
             panic!("Attempt to redeclare variable '{}'", id.inner())
         }
         let value = (expr.exec)(self, &expr.expr);
-        self.env.define(Rc::clone(&id.0), EnvVal::Lt(value));
+        self.env
+            .define(Rc::clone(&id.0), EnvVal::Lt(value));
         LiteralType::Null
     }
 
@@ -261,8 +260,9 @@ impl Interpreter {
         let BindingStmt::If { expr, if_block, .. } = stmt else { unreachable!() };
 
         let condition = (expr.exec)(self, &expr.expr);
+        let BindingStmt::Block(if_block) = &if_block.stmt else {unreachable!()};
         if Self::to_bool(condition) {
-            return (if_block.exec)(self, &if_block.stmt)
+            return self.exec_binded(&if_block);
         }
 
         LiteralType::Null
@@ -272,11 +272,13 @@ impl Interpreter {
         let BindingStmt::If { expr, if_block, else_block: Some(else_block) } = stmt else { unreachable!() };
 
         let condition = (expr.exec)(self, &expr.expr);
+        let BindingStmt::Block(if_block) = &if_block.stmt else { unreachable!()};
+        let BindingStmt::Block(else_block) = &else_block.stmt else { unreachable!() };
 
         if Self::to_bool(condition) {
-            (if_block.exec)(self, &if_block.stmt)
+            self.exec_binded(&if_block)
         } else {
-            (else_block.exec)(self, &else_block.stmt)
+            self.exec_binded(&else_block)
         }
     }
 
@@ -337,7 +339,7 @@ impl Interpreter {
         if let BindingStmt::Block(stmts) = &body.stmt {
             self.env.define(
                 Rc::clone(&ident.0),
-                EnvVal::Fn(Rc::new((params.to_vec(), stmts.to_vec()))),
+                EnvVal::Fn(Rc::new(params.to_vec()), Rc::new(stmts.to_vec())),
             )
         };
         LiteralType::Null
@@ -418,9 +420,7 @@ impl Interpreter {
             } => bind!(
             BindingStmt::FunctionDef { ident: ident.clone(), params: params.clone(), body: Box::new(Self::bind(body)) } => exec_binded_fn_def ),
 
-            Stmt::Return(expr) => {
-                bind!(BindingStmt::Return(Self::bind_expr(expr)) => exec_binded_return )
-            }
+            Stmt::Return(expr) => bind!(BindingStmt::Return(Self::bind_expr(expr)) => exec_binded_return ),
 
             _ => unreachable!(),
         }
@@ -521,18 +521,17 @@ impl Interpreter {
         self.push_env();
 
         let fn_def = self.env.get(&ident.0);
-        let fn_def = if let EnvVal::Fn(fn_def) = fn_def {
-            Rc::clone(&fn_def)
+        let (params, stmts) = if let EnvVal::Fn(params, stmts) = fn_def {
+            (Rc::clone(&params), Rc::clone(&stmts))
         } else {
             panic!("Cannot call a variable as a function")
         };
 
-        let (params, stmts) = fn_def.as_ref();
-
         for (i, param) in params.iter().enumerate() {
             if let Some(val) = args.get(i) {
                 let expr = (val.exec)(self, &val.expr);
-                self.env.define(Rc::clone(&param.0), EnvVal::Lt((expr)));
+                self.env
+                    .define(Rc::clone(&param.0), EnvVal::Lt((expr)));
                 continue;
             }
 
@@ -552,10 +551,9 @@ impl Interpreter {
 
         match self.env.get(&ident.0) {
             EnvVal::Lt(literal) => literal.clone(),
-            EnvVal::Fn(_) => LiteralType::Str(StrType::Strict(Rc::new(format!(
-                "[fun {}]",
-                ident.0.as_ref()
-            )))),
+            EnvVal::Fn(_, _) => {
+                LiteralType::Str(StrType::Strict(Rc::new(format!("[fun {}]", ident.0.as_ref()))))
+            }
         }
     }
 
@@ -650,10 +648,9 @@ impl Interpreter {
             Expr::Literal(l) => l.to_owned(),
             Expr::Variable(name) => match self.env.get(&name.0) {
                 EnvVal::Lt(literal) => literal.clone(),
-                EnvVal::Fn(_) => LiteralType::Str(StrType::Strict(Rc::new(format!(
-                    "[fun {}]",
-                    name.0.as_ref()
-                )))),
+                EnvVal::Fn(_, _) => {
+                    LiteralType::Str(StrType::Strict(Rc::new(format!("[fun {}]", name.0.as_ref()))))
+                }
             },
             Expr::ArrayExpr(array) => {
                 let mut array_evaled = vec![];
@@ -675,17 +672,17 @@ impl Interpreter {
                 self.push_env();
 
                 let fn_def = self.env.get(&ident.0);
-                let fn_def = if let EnvVal::Fn(fn_def) = fn_def {
-                    Rc::clone(&fn_def)
+                let (params, stmts) = if let EnvVal::Fn(params, stmts) = fn_def {
+                    (Rc::clone(&params), Rc::clone(&stmts))
                 } else {
                     panic!("Cannot call a variable as a function")
                 };
-                let (params, stmts) = fn_def.as_ref();
 
                 for (i, param) in params.iter().enumerate() {
                     if let Some(val) = args.get(i) {
                         let expr = self.eval_expr(val);
-                        self.env.define(Rc::clone(&param.0), EnvVal::Lt((expr)));
+                        self.env
+                            .define(Rc::clone(&param.0), EnvVal::Lt((expr)));
                         continue;
                     }
 
@@ -702,7 +699,6 @@ impl Interpreter {
         }
     }
 
-    #[inline(always)]
     fn exec_binded(&mut self, stmts: &[BindedStmt]) -> LiteralType {
         self.push_env();
 
@@ -986,9 +982,9 @@ impl Interpreter {
             (LiteralType::Bool(b0), LiteralType::Bool(b1)) => {
                 LiteralType::Number(Self::bool_to_number(*b0) + Self::bool_to_number(*b1))
             }
-            (LiteralType::Str(StrType::Loose(s)), _left) => LiteralType::Str(StrType::Loose(
-                Rc::new(s.to_string() + &Self::literal_to_str(right)),
-            )),
+            (LiteralType::Str(StrType::Loose(s)), _left) => {
+                LiteralType::Str(StrType::Loose(Rc::new(s.to_string() + &Self::literal_to_str(right))))
+            }
             (_right, LiteralType::Str(StrType::Loose(s))) => {
                 LiteralType::Str(StrType::Loose(Rc::new(Self::literal_to_str(left) + &s)))
             }
@@ -1011,12 +1007,10 @@ impl Interpreter {
 
     fn str_addition(s0: StrType, s1: &StrType) -> StrType {
         match (&s0, s1) {
-            (StrType::Strict(_), _) | (_, StrType::Strict(_)) => StrType::Strict(Rc::new(
-                Self::str_type_inner(s0) + Self::str_type_inner_ref(s1),
-            )),
-            _ => StrType::Loose(Rc::new(
-                Self::str_type_inner(s0) + Self::str_type_inner_ref(s1),
-            )),
+            (StrType::Strict(_), _) | (_, StrType::Strict(_)) => {
+                StrType::Strict(Rc::new(Self::str_type_inner(s0) + Self::str_type_inner_ref(s1)))
+            }
+            _ => StrType::Loose(Rc::new(Self::str_type_inner(s0) + Self::str_type_inner_ref(s1))),
         }
     }
 

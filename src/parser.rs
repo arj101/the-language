@@ -347,8 +347,11 @@ impl Parser {
     #[track]
     fn if_stmt(&mut self) -> Result<Stmt, String> {
         let expr = self.expression()?;
-        self.consume(&LeftBrace, "Expected Block")?;
-        let if_block = std::rc::Rc::new(self.block()?);
+        let if_block = std::rc::Rc::new(if self.match_t(&[LeftBrace]) {
+            self.block()?
+        } else {
+            self.statement()?
+        });
 
         let else_block = if self.match_t(&[Else]) {
             Some(std::rc::Rc::new(self.statement()?))
@@ -497,8 +500,12 @@ impl Parser {
         if self.match_t(&[StrStrict(String::new()), StrLoose(String::new())]) {
             use std::rc::Rc;
             return match &self.previous().t_type {
-                StrStrict(s) => Ok(Expr::Literal(LiteralType::Str(StrType::Strict(Rc::new(s.clone()))))),
-                StrLoose(s) => Ok(Expr::Literal(LiteralType::Str(StrType::Loose(Rc::new(s.clone()))))),
+                StrStrict(s) => Ok(Expr::Literal(LiteralType::Str(StrType::Strict(Rc::new(
+                    s.clone(),
+                ))))),
+                StrLoose(s) => Ok(Expr::Literal(LiteralType::Str(StrType::Loose(Rc::new(
+                    s.clone(),
+                ))))),
                 _ => unreachable!(),
             };
         }

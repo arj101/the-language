@@ -12,7 +12,7 @@ pub enum StrType {
     Loose(Rc<String>),
 }
 
-#[derive(Debug,  Clone)]
+#[derive(Debug, Clone)]
 pub enum LiteralType {
     Number(f64),
     Str(StrType),
