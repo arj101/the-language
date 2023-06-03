@@ -72,14 +72,14 @@ fn main() {
                     }
 
                     lexer.reset(&src);
-                    let tokens = lexer.tokenise().clone();
+                    let (tokens, interner) = lexer.tokenise().clone();
 
                     if show_tokens {
                         println_raw!("tokens:\n{tokens:#?}\n")
                     }
 
-                    parser.reset(tokens, src);
-                    if let Ok(ast) = parser.parse() {
+                    parser.reset(tokens.to_vec(), src);
+                    if let Ok((ast, interner)) = parser.parse(interner) {
                         if show_ast {
                             println_raw!("ast:\n{ast:#?}\n")
                         }
@@ -91,7 +91,7 @@ fn main() {
                             println_raw!("running interpreter:")
                         }
 
-                        interpreter.interpret(&ast);
+                        interpreter.interpret(&ast, interner);
                     }
 
                     if verbose_output {

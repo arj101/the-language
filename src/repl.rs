@@ -90,16 +90,16 @@ impl Repl {
 
                                 lexer.reset(&src);
 
-                                let tokens = lexer.tokenise().clone();
+                                let (tokens, interner) = lexer.tokenise().clone();
                                 if print_tokens {
                                     println_raw!("tokens: \n{:?}", tokens);
                                 }
-                                parser.reset(tokens, src);
-                                if let Ok(ast) = parser.parse() {
+                                parser.reset(tokens.to_vec(), src);
+                                if let Ok((ast, interner)) = parser.parse(interner) {
                                     if print_ast {
                                         println_raw!("ast: \n{:?}", ast);
                                     }
-                                    interpreter.interpret(&ast);
+                                    interpreter.interpret(&ast, interner);
                                 }
 
                                 is_running.store(false, sync::atomic::Ordering::Relaxed);

@@ -15,3 +15,4 @@ rustc-hash = "1.1"
 syn = { version = "^1.0", features=["full"]}
 quote = "^1.0"
 fasthash = "0.4.0"
+string-interner = "0.14.0"

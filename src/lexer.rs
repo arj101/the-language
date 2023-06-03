@@ -1,5 +1,5 @@
 use crate::tokens::{
-    TIdentifier, Token,
+    StrInterner, TIdentifier, Token,
     TokenType::{self, *},
 };
 
@@ -16,6 +16,7 @@ pub struct Lexer {
     current: usize,
     line: usize,
     line_start: usize,
+    interner: StrInterner,
 }
 
 impl Lexer {
@@ -57,6 +58,7 @@ impl Lexer {
             current: 0,
             line: 1,
             line_start: 0,
+            interner: StrInterner::new(),
         }
     }
 
@@ -70,14 +72,14 @@ impl Lexer {
         self.line_start = 0;
     }
 
-    pub fn tokenise(&mut self) -> &Vec<Token> {
+    pub fn tokenise(&mut self) -> (&Vec<Token>, StrInterner) {
         while !self.is_at_end() {
             self.start = self.current;
             self.scan_token();
         }
 
         self.add_token(Eof);
-        &self.tokens
+        (&self.tokens, self.interner.clone())
     }
 
     fn scan_token(&mut self) {
@@ -206,7 +208,7 @@ impl Lexer {
         let token = if let Some(t) = self.keywords.get(text) {
             t.clone()
         } else {
-            Identifier(TIdentifier::new(text.to_string()))
+            Identifier(TIdentifier::new(&mut self.interner, text))
         };
 
         self.add_token(token);

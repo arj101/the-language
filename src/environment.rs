@@ -1,5 +1,6 @@
 use crate::{
     expr::{BindedStmt, LiteralType, Stmt, StrType},
+    tokens::StrSymbol,
     tokens::TIdentifier,
 };
 use rustc_hash::FxHashMap;
@@ -14,7 +15,7 @@ pub enum EnvVal {
 }
 
 pub struct Environment {
-    scopes: Vec<FxHashMap<Rc<String>, EnvVal>>,
+    scopes: Vec<FxHashMap<StrSymbol, EnvVal>>,
     curr_scope: usize,
 }
 
@@ -27,12 +28,12 @@ impl Environment {
     }
 
     #[inline(always)]
-    pub fn define(&mut self, name: Rc<String>, value: EnvVal) {
+    pub fn define(&mut self, name: StrSymbol, value: EnvVal) {
         self.scopes[self.curr_scope].insert(name, value);
     }
 
     #[inline]
-    pub fn has_var(&self, name: &Rc<String>) -> bool {
+    pub fn has_var(&self, name: &StrSymbol) -> bool {
         self.scopes[self.curr_scope].contains_key(name)
     }
 
@@ -49,7 +50,7 @@ impl Environment {
     }
 
     #[inline(always)]
-    pub fn update(&mut self, name: &Rc<String>, value: EnvVal) {
+    pub fn update(&mut self, name: &StrSymbol, value: EnvVal) {
         if let Some(old_val) = self.scopes[self.curr_scope].get_mut(name) {
             *old_val = value;
             return;
@@ -65,11 +66,11 @@ impl Environment {
             }
         }
 
-        println_raw!("{}: no such variable in scope", name);
+        println_raw!("{:?}: no such variable in scope", name);
     }
 
     #[inline(always)]
-    pub fn get(&self, name: &Rc<String>) -> &EnvVal {
+    pub fn get(&self, name: &StrSymbol) -> &EnvVal {
         if let Some(val) = self.scopes[self.curr_scope].get(name) {
             return val;
         }
@@ -83,10 +84,10 @@ impl Environment {
             }
         }
 
-        println_raw!("{}: no such variable in scope", name);
-        self.scopes[0]
-            .get(&Rc::new("undefined".to_string()))
-            .unwrap()
+        panic!("{:?}: no such variable in scope", name);
+        // self.scopes[0]
+        //     .get(&Rc::new("undefined".to_string()))
+        //     .unwrap()
     }
 }
 

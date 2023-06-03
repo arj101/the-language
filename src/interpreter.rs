@@ -9,6 +9,7 @@ use crate::expr::BindingStmt;
 use crate::expr::DebugVariable;
 use crate::expr::{Expr, LiteralType, Stmt, StrType};
 use crate::repl;
+use crate::tokens::StrInterner;
 use crate::tokens::TIdentifier;
 use crate::tokens::Token;
 use crate::tokens::TokenType::{self};
@@ -39,6 +40,7 @@ pub struct Interpreter {
     env: Environment,
     flags: InterpreterFlags,
     stop_signal: Arc<AtomicBool>,
+    interner: StrInterner,
 }
 
 impl Interpreter {
@@ -48,10 +50,12 @@ impl Interpreter {
             env,
             flags: InterpreterFlags::default(),
             stop_signal,
+            interner: StrInterner::new(),
         }
     }
 
-    pub fn interpret(&mut self, stmts: &[Stmt]) {
+    pub fn interpret(&mut self, stmts: &[Stmt], interner: StrInterner) {
+        self.interner = interner;
         for stmt in stmts {
             self.execute_stmt(stmt);
         }
@@ -113,10 +117,13 @@ impl Interpreter {
             }
             Stmt::Decl { id, expr } => {
                 if self.env.has_var(&id.inner()) && !self.repl_mode {
-                    panic!("Attempt to redeclare variable '{}'", id.inner())
+                    panic!(
+                        "Attempt to redeclare variable '{}'",
+                        self.interner.resolve(id.inner()).unwrap()
+                    )
                 }
                 let value = self.evaluate(expr);
-                self.env.define(Rc::clone(&id.0), EnvVal::Lt(value));
+                self.env.define(id.inner(), EnvVal::Lt(value));
                 LiteralType::Null
             }
             Stmt::Block(stmts) => self.exec_block(stmts),
@@ -203,7 +210,7 @@ impl Interpreter {
             } => {
                 if let Stmt::Block(stmts) = *body.clone() {
                     self.env.define(
-                        Rc::clone(&ident.0),
+                        ident.inner(),
                         EnvVal::Fn(Rc::new((
                             params.to_vec(),
                             stmts.iter().map(Self::bind).collect(),
@@ -244,17 +251,20 @@ impl Interpreter {
         let BindingStmt::Decl { id, expr } = decl else { unreachable!() };
 
         if self.env.has_var(&id.inner()) && !self.repl_mode {
-            panic!("Attempt to redeclare variable '{}'", id.inner())
+            panic!(
+                "Attempt to redeclare variable '{}'",
+                self.interner.resolve(id.inner()).unwrap()
+            )
         }
         let value = (expr.exec)(self, &expr.expr);
-        self.env.define(Rc::clone(&id.0), EnvVal::Lt(value));
+        self.env.define(id.0, EnvVal::Lt(value));
         LiteralType::Null
     }
 
     fn exec_binded_block(&mut self, block: &BindingStmt) -> LiteralType {
         let BindingStmt::Block(stmts) = block else { unreachable!() };
 
-        Self::exec_binded(self, stmts)
+        self.exec_binded(stmts, true)
     }
 
     fn exec_binded_if(&mut self, stmt: &BindingStmt) -> LiteralType {
@@ -262,7 +272,7 @@ impl Interpreter {
 
         let condition = (expr.exec)(self, &expr.expr);
         if Self::to_bool(condition) {
-            return (if_block.exec)(self, &if_block.stmt)
+            return (if_block.exec)(self, &if_block.stmt);
         }
 
         LiteralType::Null
@@ -336,7 +346,7 @@ impl Interpreter {
 
         if let BindingStmt::Block(stmts) = &body.stmt {
             self.env.define(
-                Rc::clone(&ident.0),
+                ident.inner(),
                 EnvVal::Fn(Rc::new((params.to_vec(), stmts.to_vec()))),
             )
         };
@@ -532,15 +542,15 @@ impl Interpreter {
         for (i, param) in params.iter().enumerate() {
             if let Some(val) = args.get(i) {
                 let expr = (val.exec)(self, &val.expr);
-                self.env.define(Rc::clone(&param.0), EnvVal::Lt((expr)));
+                self.env.define(param.inner(), EnvVal::Lt((expr)));
                 continue;
             }
 
             self.env
-                .define(Rc::clone(&param.0), EnvVal::Lt((LiteralType::Null)));
+                .define(param.inner(), EnvVal::Lt((LiteralType::Null)));
         }
 
-        let rt_val = self.exec_binded(&stmts);
+        let rt_val = self.exec_binded(&stmts, false);
         self.flags.return_backtrack = false;
 
         self.pop_env();
@@ -554,7 +564,7 @@ impl Interpreter {
             EnvVal::Lt(literal) => literal.clone(),
             EnvVal::Fn(_) => LiteralType::Str(StrType::Strict(Rc::new(format!(
                 "[fun {}]",
-                ident.0.as_ref()
+                self.interner.resolve(ident.inner()).unwrap()
             )))),
         }
     }
@@ -652,7 +662,7 @@ impl Interpreter {
                 EnvVal::Lt(literal) => literal.clone(),
                 EnvVal::Fn(_) => LiteralType::Str(StrType::Strict(Rc::new(format!(
                     "[fun {}]",
-                    name.0.as_ref()
+                    self.interner.resolve(name.inner()).unwrap()
                 )))),
             },
             Expr::ArrayExpr(array) => {
@@ -685,15 +695,15 @@ impl Interpreter {
                 for (i, param) in params.iter().enumerate() {
                     if let Some(val) = args.get(i) {
                         let expr = self.eval_expr(val);
-                        self.env.define(Rc::clone(&param.0), EnvVal::Lt((expr)));
+                        self.env.define(param.inner(), EnvVal::Lt((expr)));
                         continue;
                     }
 
                     self.env
-                        .define(Rc::clone(&param.0), EnvVal::Lt((LiteralType::Null)));
+                        .define(param.inner(), EnvVal::Lt((LiteralType::Null)));
                 }
 
-                let rt_val = self.exec_binded(&stmts);
+                let rt_val = self.exec_binded(&stmts, false);
                 self.flags.return_backtrack = false;
 
                 self.pop_env();
@@ -703,20 +713,26 @@ impl Interpreter {
     }
 
     #[inline(always)]
-    fn exec_binded(&mut self, stmts: &[BindedStmt]) -> LiteralType {
-        self.push_env();
+    fn exec_binded(&mut self, stmts: &[BindedStmt], new_scope: bool) -> LiteralType {
+        if new_scope {
+            self.push_env();
+        }
 
         let mut rt_val = LiteralType::Null;
 
         for stmt in stmts {
             rt_val = (stmt.exec)(self, &stmt.stmt);
             if self.flags.return_backtrack {
-                self.pop_env();
+                if new_scope {
+                    self.pop_env();
+                }
                 return rt_val;
             }
         }
 
-        self.pop_env();
+        if new_scope {
+            self.pop_env();
+        }
         LiteralType::Null
     }
 

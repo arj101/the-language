@@ -1,11 +1,10 @@
 use crate::expr::LiteralType;
-use std::rc::Rc;
-use string_interner::backend::StringBackend;
 use string_interner::symbol::SymbolU32;
 use string_interner::StringInterner;
+use std::rc::Rc;
 
 pub type StrSymbol = SymbolU32;
-pub type StrInterner = StringInterner<StringBackend<StrSymbol>>;
+pub type StrInterner = StringInterner
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
@@ -93,19 +92,17 @@ impl Token {
 pub struct TIdentifier(pub StrSymbol);
 
 impl TIdentifier {
-    pub fn new(interner: &mut StrInterner, s: &str) -> Self {
-        Self(interner.get_or_intern(s))
+    pub fn new(s: String) -> Self {
+        
     }
-
-    #[inline(always)]
-    pub fn inner(&self) -> StrSymbol {
-        self.0
+    pub fn inner(&self) -> &Rc<String> {
+        &self.0
     }
 }
 
 pub mod tokens {
-    use super::{StrInterner, StrSymbol, TIdentifier, TokenType};
-    pub fn empty_ident(interner: &mut StrInterner) -> TokenType {
-        TokenType::Identifier(TIdentifier(interner.get_or_intern("")))
+    use super::{TIdentifier, TokenType};
+    pub fn empty_ident() -> TokenType {
+        TokenType::Identifier(TIdentifier::new("".to_string()))
     }
 }

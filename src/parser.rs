@@ -1,14 +1,15 @@
 use crate::expr::{DebugVariable, Expr, LiteralType, Stmt, StrType};
+use crate::print_raw;
+use crate::println_raw;
 use crate::tokens::tokens;
 use crate::tokens::TIdentifier;
 use crate::tokens::Token;
 use crate::tokens::TokenType::{self, *};
-
-use crate::print_raw;
-use crate::println_raw;
 use idk::track;
 use idk::tracker_drive_struct;
 use rustc_hash::FxHashMap;
+
+use crate::tokens::{StrInterner, StrSymbol};
 
 struct ParserState {
     had_error: bool,
@@ -30,6 +31,8 @@ impl Default for ParserState {
 pub struct Parser {
     code_lines: Vec<String>,
     tokens: Vec<Token>,
+    interner: StrInterner,
+
     current: usize,
 
     parse_info: Vec<Vec<String>>,
@@ -52,6 +55,7 @@ impl Parser {
             tracking_stack: vec![],
             state: ParserState::default(),
             errors: vec![],
+            interner: StrInterner::new(),
         }
     }
 
@@ -62,8 +66,10 @@ impl Parser {
     }
 
     #[track]
-    pub fn parse(&mut self) -> Result<Vec<Stmt>, ()> {
+    pub fn parse(&mut self, interner: StrInterner) -> Result<(Vec<Stmt>, StrInterner), ()> {
         self.state.had_error = false;
+        self.interner = interner;
+
         let mut statements = vec![];
 
         while !self.is_at_end() {
@@ -79,7 +85,7 @@ impl Parser {
         }
 
         if !self.state.had_error {
-            Ok(statements)
+            Ok((statements, self.interner.clone()))
         } else {
             Err(())
         }
@@ -114,12 +120,15 @@ impl Parser {
         }
     }
 
+    #[inline(always)]
+    fn empty_ident(&mut self) -> TokenType {
+        tokens::empty_ident(&mut self.interner)
+    }
+
     #[track]
     fn let_decl(&mut self) -> Result<Stmt, String> {
-        let name = self.consume(
-            &TokenType::Identifier(TIdentifier::new("".to_string())),
-            "Expected variable name.",
-        )?;
+        let empty_ident = self.empty_ident();
+        let name = self.consume(&empty_ident, "Expected variable name.")?;
 
         let name = if let TokenType::Identifier(name) = &name.t_type {
             name.clone()
@@ -140,6 +149,8 @@ impl Parser {
 
     #[track]
     fn statement(&mut self) -> Result<Stmt, String> {
+        let empty_ident = self.empty_ident();
+
         if self.match_t(&[TokenType::If]) {
             self.if_stmt()
         } else if self.match_t(&[TokenType::While, TokenType::For, TokenType::Do]) {
@@ -152,7 +163,7 @@ impl Parser {
             self.fn_def()
         } else if self.match_t(&[TokenType::Return]) {
             self.return_stmt()
-        } else if self.check_n(&tokens::empty_ident())
+        } else if self.check_n(&empty_ident)
         // && (self.check_ahead_n(1, &TokenType::Equal) || self.check_ahead_n(1, &TokenType::PlusEqual) {
         {
             self.assignment_stmt()
@@ -168,7 +179,12 @@ impl Parser {
 
     #[track]
     fn ident_expr(&mut self) -> Result<Expr, String> {
-        let ident = self.consume(&tokens::empty_ident(), "Expected identifier")?;
+        let empty_ident = self.empty_ident();
+
+        let ident = self.consume(
+            &empty_ident,
+            "Expected identifier",
+        )?;
         let ident = if let TokenType::Identifier(ident) = ident.t_type.clone() {
             ident
         } else {
@@ -191,8 +207,9 @@ impl Parser {
 
     #[track]
     fn fn_def(&mut self) -> Result<Stmt, String> {
+        let empty_ident = self.empty_ident();
         let ident = self.consume(
-            &TokenType::Identifier(TIdentifier::new("".to_string())),
+            &empty_ident,
             "Expected function name",
         )?;
         let ident = if let TokenType::Identifier(ident) = &ident.t_type {
@@ -203,9 +220,9 @@ impl Parser {
 
         self.consume(&TokenType::LeftParen, "Expected '('")?;
         let mut params = vec![];
-        while self.check_n(&TokenType::Identifier(TIdentifier::new("".to_string()))) {
+        while self.check_n(&empty_ident) {
             let param = self.consume(
-                &TokenType::Identifier(TIdentifier::new("".to_string())),
+                &empty_ident,
                 "Expected parameter name",
             )?;
             let param = if let TokenType::Identifier(param) = &param.t_type {
@@ -229,9 +246,11 @@ impl Parser {
 
     #[track]
     fn assignment_stmt(&mut self) -> Result<Stmt, String> {
+        let empty_ident = self.empty_ident();
+
         let name = self
             .consume(
-                &TokenType::Identifier(TIdentifier::new("".to_string())),
+                 &empty_ident,
                 "Expected variable name.",
             )?
             .clone();
@@ -542,7 +561,8 @@ impl Parser {
             }
         }
 
-        if self.check_n(&tokens::empty_ident()) {
+        let empty_ident = self.empty_ident();
+        if self.check_n(&empty_ident) {
             return self.ident_expr();
         }
 
