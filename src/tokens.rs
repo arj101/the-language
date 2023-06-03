@@ -1,10 +1,10 @@
 use crate::expr::LiteralType;
 use std::rc::Rc;
 use string_interner::backend::StringBackend;
-use string_interner::symbol::SymbolU32;
+use string_interner::symbol;
 use string_interner::StringInterner;
 
-pub type StrSymbol = SymbolU32;
+pub type StrSymbol = symbol::SymbolUsize;
 pub type StrInterner = StringInterner<StringBackend<StrSymbol>>;
 
 #[derive(Debug, Clone, PartialEq)]

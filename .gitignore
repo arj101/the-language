@@ -1,4 +1,5 @@
 /target
 .repl_history
 op.txt
-
+flamegraph.svg
+perf.*

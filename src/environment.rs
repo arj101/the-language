@@ -6,7 +6,11 @@ use crate::{
 use rustc_hash::FxHashMap;
 use std::{borrow::BorrowMut, collections::HashMap, rc::Rc, time::Instant};
 
+use nohash_hasher::NoHashHasher;
+use std::hash::BuildHasherDefault;
 use crate::println_raw;
+
+type NoHashHashMap<K, V> = HashMap<K, V, BuildHasherDefault<NoHashHasher<usize>>>;
 
 #[derive(Debug)]
 pub enum EnvVal {
@@ -15,14 +19,14 @@ pub enum EnvVal {
 }
 
 pub struct Environment {
-    scopes: Vec<FxHashMap<StrSymbol, EnvVal>>,
+    scopes: Vec<NoHashHashMap<StrSymbol, EnvVal>>,
     curr_scope: usize,
 }
 
 impl Environment {
     pub fn new() -> Self {
         Self {
-            scopes: vec![FxHashMap::default()],
+            scopes: vec![HashMap::with_capacity_and_hasher(16, BuildHasherDefault::default())],
             curr_scope: 0,
         }
     }
@@ -39,7 +43,7 @@ impl Environment {
 
     #[inline(always)]
     pub fn push_scope(&mut self) {
-        self.scopes.push(FxHashMap::default());
+        self.scopes.push(HashMap::with_capacity_and_hasher(4, BuildHasherDefault::default()));
         self.curr_scope = self.scopes.len() - 1;
     }
 
