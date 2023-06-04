@@ -20,6 +20,7 @@ pub enum EnvVal {
 
 pub struct Environment {
     scopes: Vec<NoHashHashMap<StrSymbol, EnvVal>>,
+    scope_map: NoHashHashMap<StrSymbol, Vec<usize>>,
     curr_scope: usize,
 }
 
@@ -28,12 +29,21 @@ impl Environment {
         Self {
             scopes: vec![HashMap::with_capacity_and_hasher(16, BuildHasherDefault::default())],
             curr_scope: 0,
+            scope_map: HashMap::with_capacity_and_hasher(16, BuildHasherDefault::default()),
         }
     }
 
     #[inline(always)]
     pub fn define(&mut self, name: StrSymbol, value: EnvVal) {
         self.scopes[self.curr_scope].insert(name, value);
+        
+        if let Some(scopes) = self.scope_map.get_mut(&name) {
+            scopes.push(self.curr_scope);
+        } else {
+            let mut scopes = Vec::with_capacity(4);
+            scopes.push(self.curr_scope);
+            self.scope_map.insert(name, scopes);
+        }
     }
 
     #[inline]
@@ -49,8 +59,12 @@ impl Environment {
 
     #[inline(always)]
     pub fn pop_scope(&mut self) {
-        self.scopes.pop();
+        let prev_scope = self.scopes.pop().unwrap();
         self.curr_scope -= 1;
+
+        for value in prev_scope.keys() {
+            self.scope_map.get_mut(&value).unwrap().pop();
+        }
     }
 
     #[inline(always)]
@@ -60,11 +74,8 @@ impl Environment {
             return;
         }
 
-        let mut scope_idx = self.curr_scope;
-        while scope_idx > 0 {
-            scope_idx -= 1;
-
-            if let Some(old_val) = self.scopes[scope_idx].get_mut(name) {
+        if let Some(scopes) = self.scope_map.get(name) {
+            if let Some(old_val) = self.scopes[*scopes.last().unwrap()].get_mut(name) {
                 *old_val = value;
                 return;
             }
@@ -79,11 +90,8 @@ impl Environment {
             return val;
         }
 
-        let mut scope_idx = self.curr_scope;
-        while scope_idx > 0 {
-            scope_idx -= 1;
-
-            if let Some(val) = self.scopes[scope_idx].get(name) {
+        if let Some(scopes) = self.scope_map.get(name) {
+            if let Some(val) = self.scopes[*scopes.last().unwrap()].get(name) {
                 return val;
             }
         }
