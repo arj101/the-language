@@ -181,10 +181,7 @@ impl Parser {
     fn ident_expr(&mut self) -> Result<Expr, String> {
         let empty_ident = self.empty_ident();
 
-        let ident = self.consume(
-            &empty_ident,
-            "Expected identifier",
-        )?;
+        let ident = self.consume(&empty_ident, "Expected identifier")?;
         let ident = if let TokenType::Identifier(ident) = ident.t_type.clone() {
             ident
         } else {
@@ -208,10 +205,7 @@ impl Parser {
     #[track]
     fn fn_def(&mut self) -> Result<Stmt, String> {
         let empty_ident = self.empty_ident();
-        let ident = self.consume(
-            &empty_ident,
-            "Expected function name",
-        )?;
+        let ident = self.consume(&empty_ident, "Expected function name")?;
         let ident = if let TokenType::Identifier(ident) = &ident.t_type {
             ident.clone()
         } else {
@@ -221,10 +215,7 @@ impl Parser {
         self.consume(&TokenType::LeftParen, "Expected '('")?;
         let mut params = vec![];
         while self.check_n(&empty_ident) {
-            let param = self.consume(
-                &empty_ident,
-                "Expected parameter name",
-            )?;
+            let param = self.consume(&empty_ident, "Expected parameter name")?;
             let param = if let TokenType::Identifier(param) = &param.t_type {
                 param.clone()
             } else {
@@ -249,10 +240,7 @@ impl Parser {
         let empty_ident = self.empty_ident();
 
         let name = self
-            .consume(
-                 &empty_ident,
-                "Expected variable name.",
-            )?
+            .consume(&empty_ident, "Expected variable name.")?
             .clone();
         let name_pos = self.current - 1; //hax >:)
 

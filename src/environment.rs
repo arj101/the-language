@@ -8,6 +8,9 @@ use std::{borrow::BorrowMut, collections::HashMap, rc::Rc, time::Instant};
 
 use nohash_hasher::NoHashHasher;
 use std::hash::BuildHasherDefault;
+
+use std::cell::RefCell;
+
 use crate::println_raw;
 
 type NoHashHashMap<K, V> = HashMap<K, V, BuildHasherDefault<NoHashHasher<usize>>>;
@@ -20,30 +23,46 @@ pub enum EnvVal {
 
 pub struct Environment {
     scopes: Vec<NoHashHashMap<StrSymbol, EnvVal>>,
-    scope_map: NoHashHashMap<StrSymbol, Vec<usize>>,
+
     curr_scope: usize,
+
+    var_scope_map: RefCell<NoHashHashMap<StrSymbol, Vec<usize>>>,
 }
 
 impl Environment {
     pub fn new() -> Self {
-        Self {
-            scopes: vec![HashMap::with_capacity_and_hasher(16, BuildHasherDefault::default())],
+        let mut env = Self {
+            scopes: Vec::with_capacity(32),
             curr_scope: 0,
-            scope_map: HashMap::with_capacity_and_hasher(16, BuildHasherDefault::default()),
+
+            var_scope_map: RefCell::new(HashMap::with_capacity_and_hasher(
+                16,
+                BuildHasherDefault::default(),
+            )),
+        };
+
+        for _ in 0..32 {
+            env.scopes.push(HashMap::with_capacity_and_hasher(
+                16,
+                BuildHasherDefault::default(),
+            ));
         }
+
+        env
     }
 
     #[inline(always)]
     pub fn define(&mut self, name: StrSymbol, value: EnvVal) {
         self.scopes[self.curr_scope].insert(name, value);
-        
-        if let Some(scopes) = self.scope_map.get_mut(&name) {
+
+        if let Some(scopes) = self.var_scope_map.borrow_mut().get_mut(&name) {
             scopes.push(self.curr_scope);
-        } else {
-            let mut scopes = Vec::with_capacity(4);
-            scopes.push(self.curr_scope);
-            self.scope_map.insert(name, scopes);
+            return;
         }
+
+        let mut scopes = Vec::with_capacity(32);
+        scopes.push(self.curr_scope);
+        self.var_scope_map.borrow_mut().insert(name, scopes);
     }
 
     #[inline]
@@ -53,18 +72,24 @@ impl Environment {
 
     #[inline(always)]
     pub fn push_scope(&mut self) {
-        self.scopes.push(HashMap::with_capacity_and_hasher(4, BuildHasherDefault::default()));
-        self.curr_scope = self.scopes.len() - 1;
+        self.curr_scope += 1;
+
+        if self.curr_scope >= self.scopes.len() {
+            self.scopes.push(HashMap::with_capacity_and_hasher(
+                16,
+                BuildHasherDefault::default(),
+            ));
+            return;
+        }
+
+        if !self.scopes[self.curr_scope].is_empty() {
+            self.scopes[self.curr_scope].clear()
+        }
     }
 
     #[inline(always)]
     pub fn pop_scope(&mut self) {
-        let prev_scope = self.scopes.pop().unwrap();
         self.curr_scope -= 1;
-
-        for value in prev_scope.keys() {
-            self.scope_map.get_mut(&value).unwrap().pop();
-        }
     }
 
     #[inline(always)]
@@ -74,10 +99,15 @@ impl Environment {
             return;
         }
 
-        if let Some(scopes) = self.scope_map.get(name) {
+        if let Some(scopes) = self.var_scope_map.borrow_mut().get_mut(name) {
+            while scopes.last().unwrap() > &self.curr_scope {
+                scopes.pop();
+            }
+            while !self.scopes[*scopes.last().unwrap()].contains_key(name) {
+                scopes.pop();
+            }
             if let Some(old_val) = self.scopes[*scopes.last().unwrap()].get_mut(name) {
                 *old_val = value;
-                return;
             }
         }
 
@@ -90,9 +120,18 @@ impl Environment {
             return val;
         }
 
-        if let Some(scopes) = self.scope_map.get(name) {
-            if let Some(val) = self.scopes[*scopes.last().unwrap()].get(name) {
-                return val;
+        if let Some(scopes) = self.var_scope_map.borrow_mut().get_mut(name) {
+            while scopes.last().unwrap() > &self.curr_scope {
+                scopes.pop();
+            }
+
+            'outer: loop {
+                match self.scopes[*scopes.last().unwrap()].get(name) {
+                    Some(val) => return val,
+                    None => {
+                        if let None = scopes.pop() { break 'outer }
+                    }
+                }
             }
         }
 
