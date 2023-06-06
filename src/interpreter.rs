@@ -15,6 +15,7 @@ use crate::tokens::Token;
 use crate::tokens::TokenType::{self};
 use crate::utils::pretty_print_literal;
 use crate::utils::print_literal;
+use std::default::Default;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time;
@@ -35,12 +36,149 @@ impl Default for InterpreterFlags {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct ArenaPtr {
+    ptr: *mut LiteralType,
+    idx: isize,
+    chunk: usize,
+}
+
+impl ArenaPtr {
+
+    #[inline(always)]
+    fn get_mut(&mut self) -> &mut LiteralType {
+        unsafe { &mut *self.ptr as &mut LiteralType }
+    }
+
+    #[inline(always)]
+    fn get(&self) -> &LiteralType {
+        unsafe { &*self.ptr as &LiteralType } 
+    }
+}
+
+use std::mem::MaybeUninit;
+
+struct ArenaBuffer {
+    start: isize,
+    size: isize,
+    
+    chunk_id: usize,
+
+    mem_size: isize,
+    memory: *mut LiteralType,
+}
+
+impl ArenaBuffer {
+    fn new(alloc_size: usize, chunk_id: usize) -> Self {
+        let memory = unsafe { std::alloc::alloc(std::alloc::Layout::new::<[LiteralType;1024 * 1024 * 512]>()) as *mut LiteralType };
+        if memory.is_null() { panic!("Arena allocation failed!")}
+
+        let buf = Self {
+            start: 1,
+            size: 0,
+            mem_size: alloc_size as isize,
+            memory,
+            chunk_id,
+        };
+
+        unsafe { memory.offset(0).write(LiteralType::Null) }
+
+        buf
+    }
+    #[inline(always)]
+    fn alloc(&mut self, val: LiteralType) -> Result<ArenaPtr, LiteralType> {
+        if self.size < self.mem_size {
+            let ptr = unsafe { self.memory.offset(self.size) };
+
+            unsafe { ptr.write(val); }
+
+            self.size += 1;
+
+            return Ok(ArenaPtr {
+                idx: self.size - 1,
+                chunk: self.chunk_id,
+                ptr,
+            });
+        }
+
+        if self.start > 1 {
+            //first element is used as null
+            self.start -= 1;
+            self.size += 1;
+
+            let ptr = unsafe { self.memory.offset(self.start) };
+
+            unsafe { ptr.write(val); }
+
+            return Ok(ArenaPtr {
+                idx: self.start,
+                chunk: self.chunk_id,
+                ptr,
+            });
+        }
+
+        Err(val)
+    }
+}
+
+struct Arena {
+    buf_idx: usize,
+    chunks: Vec<ArenaBuffer>,
+}
+
+
+impl Arena {
+
+    fn new(alloc_size: usize) -> Self {
+
+
+        let mut arena = Self {
+            buf_idx: 0,
+            chunks: Vec::with_capacity(16),
+        };
+
+        arena.chunks.push(ArenaBuffer::new(alloc_size, 0));
+
+        arena
+    }
+
+    #[inline(always)]
+    fn null_ptr(&mut self) -> ArenaPtr {
+
+        ArenaPtr {
+            idx: 0,
+            chunk: 0,
+            ptr: unsafe { self.chunks[0].memory.offset(0) },
+        }
+    }
+
+    #[inline(always)]
+    fn alloc(&mut self, val: LiteralType) -> ArenaPtr {
+        match self.chunks[self.buf_idx].alloc(val) {
+            Ok(ptr) => ptr,
+            Err(val) => {
+                self.chunks.push(ArenaBuffer::new(1024 * 1024, self.buf_idx+1));
+                self.buf_idx += 1;
+                self.chunks[self.buf_idx].alloc(val).unwrap()
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn dealloc(&mut self, ptr: &mut ArenaPtr) {
+    }
+}
+
 pub struct Interpreter {
     repl_mode: bool,
     env: Environment,
     flags: InterpreterFlags,
     stop_signal: Arc<AtomicBool>,
     interner: StrInterner,
+
+    stmts: Vec<Stmt>,
+
+    arena: Arena,
 }
 
 impl Interpreter {
@@ -51,13 +189,17 @@ impl Interpreter {
             flags: InterpreterFlags::default(),
             stop_signal,
             interner: StrInterner::new(),
+            stmts: vec![],
+
+            arena: Arena::new(1024), //allocate 32MB block
         }
     }
 
-    pub fn interpret(&mut self, stmts: &[Stmt], interner: StrInterner) {
+    pub fn interpret(&mut self, stmts: Vec<Stmt>, interner: StrInterner) {
+
         self.interner = interner;
-        for stmt in stmts {
-            self.execute_stmt(stmt);
+        for stmt in & stmts {
+            self.execute_stmt(&stmt);
         }
     }
 
@@ -102,16 +244,16 @@ impl Interpreter {
             Stmt::ExprStmt(expr) => {
                 let eval_result = self.evaluate(expr);
                 if self.repl_mode {
-                    pretty_print_literal(eval_result)
+                    pretty_print_literal(&eval_result)
                 }
                 LiteralType::Null
             }
             Stmt::Print(expr) => {
                 let eval_result = self.evaluate(expr);
                 if self.repl_mode {
-                    pretty_print_literal(eval_result);
+                    pretty_print_literal(&eval_result);
                 } else {
-                    print_literal(eval_result)
+                    print_literal(&eval_result)
                 }
                 LiteralType::Null
             }
@@ -123,7 +265,8 @@ impl Interpreter {
                     )
                 }
                 let value = self.evaluate(expr);
-                self.env.define(id.inner(), EnvVal::Lt(value));
+                self.env
+                    .define(id.inner(), EnvVal::Lt(self.arena.alloc(value)));
                 LiteralType::Null
             }
             Stmt::Block(stmts) => self.exec_block(stmts),
@@ -200,7 +343,7 @@ impl Interpreter {
             }
             Stmt::Assignment { id, expr } => {
                 let value = self.evaluate(expr);
-                self.env.update(&id.0, EnvVal::Lt(value));
+                self.env.update(&id.0, EnvVal::Lt(self.arena.alloc(value)));
                 LiteralType::Null
             }
             Stmt::FunctionDef {
@@ -213,7 +356,10 @@ impl Interpreter {
                         ident.inner(),
                         EnvVal::Fn(Rc::new((
                             params.to_vec(),
-                            stmts.iter().map(Self::bind).collect(),
+                            stmts
+                                .iter()
+                                .map(|v| Self::bind(&mut self.arena, v))
+                                .collect(),
                         ))),
                     )
                 };
@@ -223,31 +369,31 @@ impl Interpreter {
         }
     }
 
-    fn exec_binded_expr(&mut self, expr: &BindingStmt) -> LiteralType {
+    fn exec_binded_expr(&mut self, expr: &BindingStmt) -> ArenaPtr {
         let BindingStmt::ExprStmt(expr) = expr else { unreachable!() };
 
         let eval_result = (expr.exec)(self, &expr.expr);
         if self.repl_mode {
-            pretty_print_literal(eval_result)
+            pretty_print_literal(eval_result.get())
         }
 
-        LiteralType::Null
+        self.arena.null_ptr()
     }
 
-    fn exec_binded_print(&mut self, stmt: &BindingStmt) -> LiteralType {
+    fn exec_binded_print(&mut self, stmt: &BindingStmt) -> ArenaPtr {
         let BindingStmt::Print(expr) = stmt else { unreachable!() };
 
         let eval_result = (expr.exec)(self, &expr.expr);
         if self.repl_mode {
-            pretty_print_literal(eval_result);
+            pretty_print_literal(eval_result.get());
         } else {
-            print_literal(eval_result)
+            print_literal(eval_result.get());
         }
 
-        LiteralType::Null
+        self.arena.null_ptr()
     }
 
-    fn exec_binded_decl(&mut self, decl: &BindingStmt) -> LiteralType {
+    fn exec_binded_decl(&mut self, decl: &BindingStmt) -> ArenaPtr {
         let BindingStmt::Decl { id, expr } = decl else { unreachable!() };
 
         if self.env.has_var(&id.inner()) && !self.repl_mode {
@@ -258,39 +404,40 @@ impl Interpreter {
         }
         let value = (expr.exec)(self, &expr.expr);
         self.env.define(id.0, EnvVal::Lt(value));
-        LiteralType::Null
+
+        self.arena.null_ptr()
     }
 
-    fn exec_binded_block(&mut self, block: &BindingStmt) -> LiteralType {
+    fn exec_binded_block(&mut self, block: &BindingStmt) -> ArenaPtr {
         let BindingStmt::Block(stmts) = block else { unreachable!() };
 
         self.exec_binded(stmts, true)
     }
 
-    fn exec_binded_if(&mut self, stmt: &BindingStmt) -> LiteralType {
+    fn exec_binded_if(&mut self, stmt: &BindingStmt) -> ArenaPtr {
         let BindingStmt::If { expr, if_block, .. } = stmt else { unreachable!() };
 
         let condition = (expr.exec)(self, &expr.expr);
-        if Self::to_bool(condition) {
+        if Self::to_bool(condition.get().clone()) {
             return (if_block.exec)(self, &if_block.stmt);
         }
 
-        LiteralType::Null
+        self.arena.null_ptr()
     }
 
-    fn exec_binded_if_else(&mut self, stmt: &BindingStmt) -> LiteralType {
+    fn exec_binded_if_else(&mut self, stmt: &BindingStmt) -> ArenaPtr {
         let BindingStmt::If { expr, if_block, else_block: Some(else_block) } = stmt else { unreachable!() };
 
         let condition = (expr.exec)(self, &expr.expr);
 
-        if Self::to_bool(condition) {
+        if Self::to_bool(condition.get().clone()) {
             (if_block.exec)(self, &if_block.stmt)
         } else {
             (else_block.exec)(self, &else_block.stmt)
         }
     }
 
-    fn exec_binded_loop(&mut self, stmt: &BindingStmt) -> LiteralType {
+    fn exec_binded_loop(&mut self, stmt: &BindingStmt) -> ArenaPtr {
         let BindingStmt::Loop { entry_controlled, init, expr: condition, updation, body } = stmt else { unreachable!() };
 
         self.push_env();
@@ -306,7 +453,7 @@ impl Interpreter {
         let mut rt_val;
         //to avoid checking for updation statement inside the loop
         if let Some(updation) = &updation {
-            while let LiteralType::Bool(true) = (condition.exec)(self, &condition.expr) {
+            while let LiteralType::Bool(true) = (condition.exec)(self, &condition.expr).get() {
                 rt_val = (body.exec)(self, &body.stmt);
                 if self.flags.return_backtrack
                     || self.stop_signal.load(std::sync::atomic::Ordering::Relaxed)
@@ -317,7 +464,7 @@ impl Interpreter {
                 (updation.exec)(self, &updation.stmt);
             }
         } else {
-            while let LiteralType::Bool(true) = (condition.exec)(self, &condition.expr) {
+            while let LiteralType::Bool(true) = (condition.exec)(self, &condition.expr).get() {
                 rt_val = (body.exec)(self, &body.stmt);
                 if self.flags.return_backtrack
                     || self.stop_signal.load(std::sync::atomic::Ordering::Relaxed)
@@ -329,19 +476,19 @@ impl Interpreter {
         }
 
         self.pop_env();
-        LiteralType::Null
+        self.arena.null_ptr()
     }
 
-    fn exec_binded_assignment(&mut self, stmt: &BindingStmt) -> LiteralType {
+    fn exec_binded_assignment(&mut self, stmt: &BindingStmt) -> ArenaPtr {
         let BindingStmt::Assignment { id, expr } = stmt else { unreachable!() };
 
         let value = (expr.exec)(self, &expr.expr);
         self.env.update(&id.0, EnvVal::Lt(value));
 
-        LiteralType::Null
+        self.arena.null_ptr()
     }
 
-    fn exec_binded_fn_def(&mut self, stmt: &BindingStmt) -> LiteralType {
+    fn exec_binded_fn_def(&mut self, stmt: &BindingStmt) -> ArenaPtr {
         let BindingStmt::FunctionDef { ident, params, body } = stmt else { unreachable!() };
 
         if let BindingStmt::Block(stmts) = &body.stmt {
@@ -350,10 +497,11 @@ impl Interpreter {
                 EnvVal::Fn(Rc::new((params.to_vec(), stmts.to_vec()))),
             )
         };
-        LiteralType::Null
+
+        self.arena.null_ptr()
     }
 
-    fn exec_binded_return(&mut self, stmt: &BindingStmt) -> LiteralType {
+    fn exec_binded_return(&mut self, stmt: &BindingStmt) -> ArenaPtr {
         let BindingStmt::Return(val) = stmt else { unreachable!() };
 
         let rt_val = (val.exec)(self, &val.expr);
@@ -361,7 +509,7 @@ impl Interpreter {
         rt_val
     }
 
-    fn bind(stmt: &Stmt) -> BindedStmt {
+    fn bind(arena: &mut Arena, stmt: &Stmt) -> BindedStmt {
         macro_rules! bind {
             ($stmt:expr => $f:ident) => {
                 BindedStmt {
@@ -373,31 +521,31 @@ impl Interpreter {
 
         match stmt {
             Stmt::Block(stmts) => BindedStmt {
-                stmt: BindingStmt::Block(stmts.iter().map(Self::bind).collect()),
+                stmt: BindingStmt::Block(stmts.iter().map(|v| Self::bind(arena, v)).collect()),
                 exec: Self::exec_binded_block,
             },
             Stmt::ExprStmt(expr) => {
-                bind!(BindingStmt::ExprStmt(Self::bind_expr(expr)) => exec_binded_expr)
+                bind!(BindingStmt::ExprStmt(Self::bind_expr(arena, expr)) => exec_binded_expr)
             }
             Stmt::Print(expr) => {
-                bind!(BindingStmt::Print(Self::bind_expr(expr)) => exec_binded_print)
+                bind!(BindingStmt::Print(Self::bind_expr(arena, expr)) => exec_binded_print)
             }
             Stmt::Decl { id, expr } => {
-                bind!(BindingStmt::Decl{id: id.clone(), expr: Self::bind_expr(expr)} => exec_binded_decl)
+                bind!(BindingStmt::Decl{id: id.clone(), expr: Self::bind_expr(arena, expr)} => exec_binded_decl)
             }
             Stmt::If {
                 expr,
                 if_block,
                 else_block: None,
             } => {
-                bind!(BindingStmt::If{expr: Self::bind_expr(expr), if_block: Rc::new(Self::bind(if_block)), else_block:None} => exec_binded_if)
+                bind!(BindingStmt::If{expr: Self::bind_expr(arena,expr), if_block: Rc::new(Self::bind(arena, if_block)), else_block:None} => exec_binded_if)
             }
             Stmt::If {
                 expr,
                 if_block,
                 else_block: Some(else_block),
             } => {
-                bind!(BindingStmt::If{expr: Self::bind_expr(expr), if_block: Rc::new(Self::bind(if_block)), else_block: Some(Rc::new(Self::bind(else_block)))} => exec_binded_if_else)
+                bind!(BindingStmt::If{expr: Self::bind_expr(arena, expr), if_block: Rc::new(Self::bind(arena, if_block)), else_block: Some(Rc::new(Self::bind(arena, else_block)))} => exec_binded_if_else)
             }
             Stmt::Loop {
                 entry_controlled,
@@ -407,10 +555,10 @@ impl Interpreter {
                 body,
             } => bind!( BindingStmt::Loop{
             entry_controlled: *entry_controlled,
-            init: init.clone().map(|init| Box::new(Self::bind(init.as_ref()))), expr: Self::bind_expr(expr), updation: updation.clone().map(|updation| Box::new(Self::bind(updation.as_ref()))), body: Box::new(Self::bind(body))} => exec_binded_loop),
+            init: init.clone().map(|init| Box::new(Self::bind(arena, init.as_ref()))), expr: Self::bind_expr(arena, expr), updation: updation.clone().map(|updation| Box::new(Self::bind(arena, updation.as_ref()))), body: Box::new(Self::bind(arena, body))} => exec_binded_loop),
 
             Stmt::Assignment { id, expr } => {
-                bind!( BindingStmt::Assignment { id: id.clone(), expr: Self::bind_expr(expr) } => exec_binded_assignment)
+                bind!( BindingStmt::Assignment { id: id.clone(), expr: Self::bind_expr(arena, expr) } => exec_binded_assignment)
             }
 
             Stmt::FunctionDef {
@@ -418,43 +566,47 @@ impl Interpreter {
                 params,
                 body,
             } => bind!(
-            BindingStmt::FunctionDef { ident: ident.clone(), params: params.clone(), body: Box::new(Self::bind(body)) } => exec_binded_fn_def ),
+            BindingStmt::FunctionDef { ident: ident.clone(), params: params.clone(), body: Box::new(Self::bind(arena, body)) } => exec_binded_fn_def ),
 
             Stmt::Return(expr) => {
-                bind!(BindingStmt::Return(Self::bind_expr(expr)) => exec_binded_return )
+                bind!(BindingStmt::Return(Self::bind_expr(arena, expr)) => exec_binded_return )
             }
 
             _ => unreachable!(),
         }
     }
 
-    fn eval_binded_literal(&mut self, lt: &BindingExpr) -> LiteralType {
+    fn eval_binded_literal(&mut self, lt: &BindingExpr) -> ArenaPtr {
         let BindingExpr::Literal(lt) = lt else { unreachable!() };
-        lt.clone()
+        *lt
     }
 
-    fn eval_binded_binary(&mut self, binary: &BindingExpr) -> LiteralType {
+    fn eval_binded_binary(&mut self, binary: &BindingExpr) -> ArenaPtr {
         let BindingExpr::Binary { left, operator, right } = binary else { unreachable!() };
 
         let mut left = (left.exec)(self, &left.expr);
         let mut right = (right.exec)(self, &right.expr);
 
-        match (&left, &right) {
+        match (&left.get(), &right.get()) {
             (LiteralType::Number(_), LiteralType::Str(StrType::Loose(s))) => {
                 if let Ok(n) = s.parse::<f64>() {
-                    right = LiteralType::Number(n)
+                    right = self.arena.alloc(LiteralType::Number(n));
                 }
             }
             (LiteralType::Str(StrType::Loose(s)), LiteralType::Number(_)) => {
                 if let Ok(n) = s.parse::<f64>() {
-                    left = LiteralType::Number(n)
+                    left = self.arena.alloc(LiteralType::Number(n));
                 }
             }
             (LiteralType::Number(_), LiteralType::Bool(b)) => {
-                right = LiteralType::Number(Self::bool_to_number(b))
+                right = self
+                    .arena
+                    .alloc(LiteralType::Number(Self::bool_to_number(b)))
             }
             (LiteralType::Bool(b), LiteralType::Number(_)) => {
-                left = LiteralType::Number(Self::bool_to_number(b))
+                left = self
+                    .arena
+                    .alloc(LiteralType::Number(Self::bool_to_number(b)))
             }
             _ => (),
         }
@@ -472,37 +624,42 @@ impl Interpreter {
 
         use TokenType::*;
         eval! {
-            Plus => Self::addition(&left, &right),
-            Minus => Self::subtraction(left, right),
-            Slash => Self::division(left, right),
-            Star => Self::multiplication(left, right),
-            StarStar => Self::exponentiation(left, right),
-            EqualEqual => Self::equal(&left, &right),
-            BangEqual => Self::not_equal(&left, &right),
-            Greater => Self::greater(&left, &right),
-            GreaterEqual => Self::greater_equal(&left, &right),
-            Less => Self::less(&left, &right),
-            LessEqual => Self::less_equal(&left, &right),
-            Percentage => Self::modulus(left, right),
+            Plus => self.addition(left, right),
+            Minus => self.subtraction(left, right),
+            Slash => self.division(left, right),
+            Star => self.multiplication(left, right),
+            StarStar => self.exponentiation(left, right),
+            EqualEqual => self.equal(left, right),
+            BangEqual => self.not_equal(left, right),
+            Greater => self.greater(left, right),
+            GreaterEqual => self.greater_equal(left, right),
+            Less => self.less(left, right),
+            LessEqual => self.less_equal(left, right),
+            Percentage => self.modulus(left, right),
         }
     }
 
-    fn eval_binded_unary(&mut self, unary: &BindingExpr) -> LiteralType {
+    fn eval_binded_unary(&mut self, unary: &BindingExpr) -> ArenaPtr {
         let BindingExpr::Unary { operator, right } = unary else { unreachable!() };
         let right = (right.exec)(self, &right.expr);
-        let rt = match operator.t_type {
+
+
+        self.arena.alloc(match operator.t_type {
             TokenType::Minus => {
-                let right = if let LiteralType::Number(n) = right {
-                    n
+                let right_val = if let LiteralType::Number(n) = right.get() {
+                    *n
                 } else {
                     std::f64::NAN
                 };
-                LiteralType::Number(-right)
+
+                LiteralType::Number(-right_val)
             }
-            TokenType::Bang => match right {
-                LiteralType::Bool(b) => LiteralType::Bool(!b),
-                LiteralType::Number(n) => LiteralType::Bool(Self::number_to_bool(n)),
-                LiteralType::Null => LiteralType::Bool(true),
+            TokenType::Bang => match right.get() {
+                LiteralType::Bool(b) =>  LiteralType::Bool(!b),
+                LiteralType::Number(n) => {
+                    LiteralType::Bool(Self::number_to_bool(*n))
+                }
+                LiteralType::Null =>  LiteralType::Bool(true),
                 LiteralType::Str(s) => {
                     let s = Self::str_type_inner_ref(&s);
                     if s.is_empty() {
@@ -511,14 +668,13 @@ impl Interpreter {
                         LiteralType::Bool(false)
                     }
                 }
-                LiteralType::Array(a) => LiteralType::Bool(!a.is_empty()),
+                LiteralType::Array(a) =>  LiteralType::Bool(!a.is_empty()),
             },
             _ => unreachable!(),
-        };
-        rt
+        })
     }
 
-    fn eval_binded_fn_call(&mut self, fn_call: &BindingExpr) -> LiteralType {
+    fn eval_binded_fn_call(&mut self, fn_call: &BindingExpr) -> ArenaPtr {
         let BindingExpr::FnCall(ident, args) = fn_call else { unreachable!() };
         self.push_env();
 
@@ -540,7 +696,7 @@ impl Interpreter {
             }
 
             self.env
-                .define(param.inner(), EnvVal::Lt(LiteralType::Null));
+                .define(param.inner(), EnvVal::Lt(self.arena.null_ptr()));
         }
 
         let rt_val = self.exec_binded(&stmts, false);
@@ -550,55 +706,57 @@ impl Interpreter {
         rt_val
     }
 
-    fn eval_binded_var(&mut self, var: &BindingExpr) -> LiteralType {
+    fn eval_binded_var(&mut self, var: &BindingExpr) -> ArenaPtr {
         let BindingExpr::Variable(ident) = var else { unreachable!() };
 
         match self.env.get(&ident.0) {
-            EnvVal::Lt(literal) => literal.clone(),
-            EnvVal::Fn(_) => LiteralType::Str(StrType::Strict(Rc::new(format!(
-                "[fun {}]",
-                self.interner.resolve(ident.inner()).unwrap()
-            )))),
+            EnvVal::Lt(literal) => *literal,
+            EnvVal::Fn(_) => self
+                .arena
+                .alloc(LiteralType::Str(StrType::Strict(Rc::new(format!(
+                    "[fun {}]",
+                    self.interner.resolve(ident.inner()).unwrap()
+                ))))),
         }
     }
 
-    fn eval_binded_array(&mut self, array: &BindingExpr) -> LiteralType {
+    fn eval_binded_array(&mut self, array: &BindingExpr) -> ArenaPtr {
         let BindingExpr::ArrayExpr(array) = array else { unreachable!() };
 
         let mut evaled_array = vec![];
         for expr in array {
-            evaled_array.push((expr.exec)(self, &expr.expr))
+            evaled_array.push((expr.exec)(self, &expr.expr).get().clone())
         }
 
-        LiteralType::Array(Rc::new(evaled_array))
+        self.arena.alloc(LiteralType::Array(Rc::new(evaled_array)))
     }
 
-    fn eval_binded_debug_var(&mut self, var: &BindingExpr) -> LiteralType {
+    fn eval_binded_debug_var(&mut self, var: &BindingExpr) -> ArenaPtr {
         let BindingExpr::DebugVariable(var) = var else { unreachable!() };
 
         match var {
-            DebugVariable::Time => LiteralType::Number(
+            DebugVariable::Time => self.arena.alloc(LiteralType::Number(
                 time::SystemTime::now()
                     .duration_since(time::UNIX_EPOCH)
                     .unwrap()
                     .as_secs_f64(),
-            ),
+            )),
         }
     }
 
-    fn bind_expr(expr: &Expr) -> BindedExpr {
+    fn bind_expr(arena: &mut Arena, expr: &Expr) -> BindedExpr {
         match expr {
             Expr::Literal(lt) => BindedExpr {
-                expr: BindingExpr::Literal(lt.clone()),
+                expr: BindingExpr::Literal(arena.alloc(lt.clone())),
                 exec: Self::eval_binded_literal,
             },
 
-            Expr::Grouping(expr) => Self::bind_expr(expr),
+            Expr::Grouping(expr) => Self::bind_expr(arena, expr),
 
             Expr::Unary { operator, right } => BindedExpr {
                 expr: BindingExpr::Unary {
                     operator: operator.clone(),
-                    right: Box::new(Self::bind_expr(right)),
+                    right: Box::new(Self::bind_expr(arena, right)),
                 },
                 exec: Self::eval_binded_unary,
             },
@@ -609,9 +767,9 @@ impl Interpreter {
                 right,
             } => BindedExpr {
                 expr: BindingExpr::Binary {
-                    left: Box::new(Self::bind_expr(left)),
+                    left: Box::new(Self::bind_expr(arena, left)),
                     operator: operator.clone(),
-                    right: Box::new(Self::bind_expr(right)),
+                    right: Box::new(Self::bind_expr(arena, right)),
                 },
                 exec: Self::eval_binded_binary,
             },
@@ -619,7 +777,7 @@ impl Interpreter {
             Expr::FnCall(ident, params) => BindedExpr {
                 expr: BindingExpr::FnCall(
                     ident.clone(),
-                    params.iter().map(Self::bind_expr).collect(),
+                    params.iter().map(|v| Self::bind_expr(arena, v)).collect(),
                 ),
                 exec: Self::eval_binded_fn_call,
             },
@@ -630,7 +788,7 @@ impl Interpreter {
             },
 
             Expr::ArrayExpr(arr) => BindedExpr {
-                expr: BindingExpr::ArrayExpr(arr.iter().map(Self::bind_expr).collect()),
+                expr: BindingExpr::ArrayExpr(arr.iter().map(|v|Self::bind_expr(arena, v)).collect()),
                 exec: Self::eval_binded_array,
             },
 
@@ -652,7 +810,7 @@ impl Interpreter {
             } => self.eval_binary(left, operator, right),
             Expr::Literal(l) => l.to_owned(),
             Expr::Variable(name) => match self.env.get(&name.0) {
-                EnvVal::Lt(literal) => literal.clone(),
+                EnvVal::Lt(literal) => literal.get().clone(),
                 EnvVal::Fn(_) => LiteralType::Str(StrType::Strict(Rc::new(format!(
                     "[fun {}]",
                     self.interner.resolve(name.inner()).unwrap()
@@ -688,30 +846,31 @@ impl Interpreter {
                 for (i, param) in params.iter().enumerate() {
                     if let Some(val) = args.get(i) {
                         let expr = self.eval_expr(val);
-                        self.env.define(param.inner(), EnvVal::Lt((expr)));
+                        self.env
+                            .define(param.inner(), EnvVal::Lt(self.arena.alloc(expr)));
                         continue;
                     }
 
                     self.env
-                        .define(param.inner(), EnvVal::Lt((LiteralType::Null)));
+                        .define(param.inner(), EnvVal::Lt(self.arena.null_ptr()));
                 }
 
                 let rt_val = self.exec_binded(&stmts, false);
                 self.flags.return_backtrack = false;
 
                 self.pop_env();
-                rt_val
+                rt_val.get().clone()
             }
         }
     }
 
     #[inline(always)]
-    fn exec_binded(&mut self, stmts: &[BindedStmt], new_scope: bool) -> LiteralType {
+    fn exec_binded(&mut self, stmts: &[BindedStmt], new_scope: bool) -> ArenaPtr {
         if new_scope {
             self.push_env();
         }
 
-        let mut rt_val = LiteralType::Null;
+        let mut rt_val;
 
         for stmt in stmts {
             rt_val = (stmt.exec)(self, &stmt.stmt);
@@ -726,7 +885,8 @@ impl Interpreter {
         if new_scope {
             self.pop_env();
         }
-        LiteralType::Null
+
+        self.arena.null_ptr()
     }
 
     fn eval_binary(&mut self, left: &Expr, operator: &Token, right: &Expr) -> LiteralType {
@@ -764,46 +924,60 @@ impl Interpreter {
             };
         }
 
+        let (left, right) = (self.arena.alloc(left), self.arena.alloc(right));
+
         use TokenType::*;
         eval! {
-            Plus => Self::addition(&left, &right),
-            Minus => Self::subtraction(left, right),
-            Slash => Self::division(left, right),
-            Star => Self::multiplication(left, right),
-            StarStar => Self::exponentiation(left, right),
-            EqualEqual => Self::equal(&left, &right),
-            BangEqual => Self::not_equal(&left, &right),
-            Greater => Self::greater(&left, &right),
-            GreaterEqual => Self::greater_equal(&left, &right),
-            Less => Self::less(&left, &right),
-            LessEqual => Self::less_equal(&left, &right),
-            Percentage => Self::modulus(left, right),
-        }
+            Plus => self.addition(left, right),
+            Minus => self.subtraction(left, right),
+            Slash => self.division(left, right),
+            Star => self.multiplication(left, right),
+            StarStar => self.exponentiation(left, right),
+            EqualEqual => self.equal(left, right),
+            BangEqual => self.not_equal(left, right),
+            Greater => self.greater(left, right),
+            GreaterEqual => self.greater_equal(left, right),
+            Less => self.less(left, right),
+            LessEqual => self.less_equal(left, right),
+            Percentage => self.modulus(left, right),
+        }.get().clone()
     }
 
     #[inline(always)]
-    fn modulus(left: LiteralType, right: LiteralType) -> LiteralType {
-        let left = Self::try_to_number(left);
-        let right = Self::try_to_number(right);
+    fn modulus(&mut self, left: ArenaPtr, right: ArenaPtr) -> ArenaPtr {
+        let left = self.try_to_number(left);
+        let right = self.try_to_number(right);
+        let left = left.get();
+        let right = right.get();
+
+        self.arena.alloc(
         LiteralType::Number(
             if let (LiteralType::Number(a), LiteralType::Number(b)) = (left, right) {
                 a % b
             } else {
                 std::f64::NAN
             },
+        ))
+    }
+
+    #[inline(always)]
+    fn less_equal(&mut self, left: ArenaPtr, right: ArenaPtr) -> ArenaPtr {
+        let is_less = self.less(left, right) ;
+        let is_equal = self.equal(left, right);
+
+        self.arena.alloc(
+            if let LiteralType::Bool(true) = is_less.get() {
+                LiteralType::Bool(true)
+            } else {
+                let LiteralType::Bool(is_equal) = is_equal.get() else { unreachable!() };
+                LiteralType::Bool(*is_equal)
+            }
         )
     }
 
     #[inline(always)]
-    fn less_equal(left: &LiteralType, right: &LiteralType) -> LiteralType {
-        let LiteralType::Bool(is_equal) = Self::equal(left, right) else { unreachable!() };
-        let LiteralType::Bool(is_less) = Self::less(left, right) else { unreachable!() };
-        LiteralType::Bool(is_equal || is_less)
-    }
-
-    #[inline(always)]
-    fn less(left: &LiteralType, right: &LiteralType) -> LiteralType {
-        match (left, right) {
+    fn less(&mut self, left: ArenaPtr, right: ArenaPtr) -> ArenaPtr {
+        let val = match (left.get(), right.get()) {
             (LiteralType::Number(a), LiteralType::Number(b)) => LiteralType::Bool(a < b),
             (LiteralType::Str(a), LiteralType::Str(b)) => {
                 let a = Self::str_type_inner(a);
@@ -819,27 +993,35 @@ impl Interpreter {
             }
             (l, r) => {
                 if let (LiteralType::Number(a), LiteralType::Number(b)) = (
-                    Self::try_to_number(l.clone()),
-                    Self::try_to_number(r.clone()),
+                    self.try_to_number(left).get(),
+                    self.try_to_number(right).get(),
                 ) {
                     LiteralType::Bool(a < b)
                 } else {
                     LiteralType::Bool(false)
                 }
             }
-        }
+        };
+
+        self.arena.alloc(val)
     }
 
     #[inline(always)]
-    fn greater_equal(left: &LiteralType, right: &LiteralType) -> LiteralType {
-        let LiteralType::Bool(is_equal) = Self::equal(left, right) else { unreachable!() };
-        let LiteralType::Bool(is_greater) = Self::greater(left, right) else { unreachable!() };
-        LiteralType::Bool(is_equal || is_greater)
+    fn greater_equal(&mut self, left: ArenaPtr, right: ArenaPtr) -> ArenaPtr {
+        let is_equal = self.equal(left, right) ;
+        let is_greater = self.greater(left, right) ;
+
+        self.arena.alloc(if let LiteralType::Bool(true) = is_greater.get() {
+            LiteralType::Bool(true)
+        } else {
+            let LiteralType::Bool(is_equal) = is_equal.get() else { unreachable!() };
+            LiteralType::Bool(*is_equal)
+        })
     }
 
     #[inline(always)]
-    fn greater(left: &LiteralType, right: &LiteralType) -> LiteralType {
-        match (left, right) {
+    fn greater(&mut self, left: ArenaPtr, right: ArenaPtr) -> ArenaPtr {
+        let val = match (left.get(), right.get()) {
             (LiteralType::Number(a), LiteralType::Number(b)) => LiteralType::Bool(a > b),
             (LiteralType::Str(a), LiteralType::Str(b)) => {
                 let a = Self::str_type_inner(&a);
@@ -855,26 +1037,35 @@ impl Interpreter {
             (LiteralType::Null, LiteralType::Str(_)) => LiteralType::Bool(false),
             (l, r) => {
                 if let (LiteralType::Number(a), LiteralType::Number(b)) = (
-                    Self::try_to_number(l.clone()),
-                    Self::try_to_number(r.clone()),
+                    self.try_to_number(left).get(),
+                    self.try_to_number(right).get(),
                 ) {
                     LiteralType::Bool(a > b)
                 } else {
                     LiteralType::Bool(false)
                 }
             }
-        }
+        };
+
+        self.arena.alloc(val)
     }
 
     #[inline(always)]
-    fn not_equal(left: &LiteralType, right: &LiteralType) -> LiteralType {
-        let LiteralType::Bool(b) = Self::equal(left, right) else { panic!() };
-        LiteralType::Bool(!b)
+    fn not_equal(&mut self, left: ArenaPtr, right: ArenaPtr) -> ArenaPtr {
+        let  result = self.equal(left, right) ;
+        
+
+        self.arena.alloc(if let LiteralType::Bool(b) = result.get() {
+            LiteralType::Bool(!b)
+        } else {
+                LiteralType::Bool(false)
+            })
+
     }
 
     #[inline(always)]
-    fn equal(left: &LiteralType, right: &LiteralType) -> LiteralType {
-        match (left, right) {
+    fn equal(&mut self, left: ArenaPtr, right: ArenaPtr) -> ArenaPtr {
+        self.arena.alloc(match (left.get(), right.get()) {
             (LiteralType::Number(a), LiteralType::Number(b)) => LiteralType::Bool(a == b),
             (LiteralType::Bool(a), LiteralType::Bool(b)) => LiteralType::Bool(a == b),
             (LiteralType::Str(a), LiteralType::Str(b)) => {
@@ -885,37 +1076,38 @@ impl Interpreter {
             }
             (LiteralType::Null, LiteralType::Null) => LiteralType::Bool(true),
             _ => LiteralType::Bool(false),
-        }
+        })
     }
 
     #[inline(always)]
-    fn multiplication(left: LiteralType, right: LiteralType) -> LiteralType {
-        let left = Self::try_to_number(left);
-        let right = Self::try_to_number(right);
-        match (left, right) {
+    fn multiplication(&mut self, left: ArenaPtr, right: ArenaPtr) -> ArenaPtr {
+        let left = self.try_to_number(left);
+        let right = self.try_to_number(right);
+        
+        self.arena.alloc(match (left.get(), right.get()) {
             (LiteralType::Number(a), LiteralType::Number(b)) => LiteralType::Number(a * b),
             (LiteralType::Str(s), LiteralType::Number(n)) => {
-                LiteralType::Str(Self::str_multiplication(s, n))
+                LiteralType::Str(Self::str_multiplication(s.clone(), *n))
             }
             _ => LiteralType::Number(std::f64::NAN),
-        }
+        })
     }
 
     #[inline(always)]
-    fn exponentiation(left: LiteralType, right: LiteralType) -> LiteralType {
-        let left = Self::try_to_number(left);
-        let right = Self::try_to_number(right);
+    fn exponentiation(&mut self, left: ArenaPtr, right: ArenaPtr) -> ArenaPtr {
+        let left = self.try_to_number(left);
+        let right = self.try_to_number(right);
 
-        match (left, right) {
+        self.arena.alloc(match (left.get(), right.get()) {
             (LiteralType::Number(a), LiteralType::Number(b)) => {
-                if b.floor() == b {
-                    LiteralType::Number(a.powi(b as i32))
+                if b.floor() == *b {
+                    LiteralType::Number(a.powi(*b as i32))
                 } else {
-                    LiteralType::Number(a.powf(b))
+                    LiteralType::Number(a.powf(*b))
                 }
             }
             _ => LiteralType::Number(std::f64::NAN),
-        }
+        })
     }
 
     #[inline(always)]
@@ -928,10 +1120,11 @@ impl Interpreter {
     }
 
     #[inline(always)]
-    fn division(left: LiteralType, right: LiteralType) -> LiteralType {
-        let left = Self::try_to_number(left);
-        let right = Self::try_to_number(right);
-        match (left, right) {
+    fn division(&mut self, left: ArenaPtr, right: ArenaPtr) -> ArenaPtr {
+        let left = self.try_to_number(left);
+        let right = self.try_to_number(right);
+        
+        self.arena.alloc(match (left.get(), right.get()) {
             (LiteralType::Number(a), LiteralType::Number(b)) => LiteralType::Number(a / b),
             (LiteralType::Str(s), LiteralType::Number(n)) => {
                 let n = n.floor() as usize;
@@ -958,25 +1151,26 @@ impl Interpreter {
                 }
             }
             _ => LiteralType::Number(std::f64::NAN),
-        }
+        })
     }
 
     #[inline(always)]
-    fn subtraction(left: LiteralType, right: LiteralType) -> LiteralType {
-        let left = Self::try_to_number(left);
-        let right = Self::try_to_number(right);
-        LiteralType::Number(
-            if let (LiteralType::Number(a), LiteralType::Number(b)) = (left, right) {
+    fn subtraction(&mut self, left: ArenaPtr, right: ArenaPtr) -> ArenaPtr {
+        let left = self.try_to_number(left);
+        let right = self.try_to_number(right);
+        
+        self.arena.alloc(LiteralType::Number(
+            if let (LiteralType::Number(a), LiteralType::Number(b)) = (left.get(), right.get()) {
                 a - b
             } else {
                 std::f64::NAN
             },
-        )
+        ))
     }
 
     #[inline(always)]
-    fn addition(left: &LiteralType, right: &LiteralType) -> LiteralType {
-        match (&left, &right) {
+    fn addition(&mut self, left: ArenaPtr, right: ArenaPtr) -> ArenaPtr {
+        let val = match (left.get(), right.get()) {
             (LiteralType::Number(a), LiteralType::Number(b)) => LiteralType::Number(a + b),
             (LiteralType::Array(array), c) => {
                 let mut array_new = array.as_ref().clone();
@@ -1011,19 +1205,18 @@ impl Interpreter {
                 LiteralType::Number(Self::bool_to_number(b0) + Self::bool_to_number(b1))
             }
             (LiteralType::Str(StrType::Loose(s)), _left) => LiteralType::Str(StrType::Loose(
-                Rc::new(s.to_string() + &Self::literal_to_str(&right)),
+                Rc::new(s.to_string() + &Self::literal_to_str(&right.get())),
             )),
             (_right, LiteralType::Str(StrType::Loose(s))) => {
-                LiteralType::Str(StrType::Loose(Rc::new(Self::literal_to_str(&left) + &s)))
+                LiteralType::Str(StrType::Loose(Rc::new(Self::literal_to_str(&left.get()) + &s)))
             }
             (LiteralType::Str(StrType::Strict(_)), _)
             | (_, LiteralType::Str(StrType::Strict(_))) => LiteralType::Number(std::f64::NAN),
             (l, r) => {
-                let (l, r) = (l.clone(), r.clone());
                 LiteralType::Number(
                     if let (LiteralType::Number(a), LiteralType::Number(b)) = (
-                        Self::try_to_number(l.clone()),
-                        Self::try_to_number(r.clone()),
+                        self.try_to_number(left).get(),
+                        self.try_to_number(right).get(),
                     ) {
                         a + b
                     } else {
@@ -1031,7 +1224,9 @@ impl Interpreter {
                     },
                 )
             }
-        }
+        };
+
+        self.arena.alloc(val)
     }
 
     #[inline(always)]
@@ -1110,7 +1305,7 @@ impl Interpreter {
     }
 
     #[inline(always)]
-    fn try_to_number(l: LiteralType) -> LiteralType {
+    fn try_to_number_lt(l: LiteralType) -> LiteralType {
         if let LiteralType::Number(..) = l {
             return l;
         }
@@ -1130,6 +1325,29 @@ impl Interpreter {
             },
             everything_else => everything_else,
         }
+    }
+
+    #[inline(always)]
+    fn try_to_number(&mut self, l: ArenaPtr) -> ArenaPtr {
+        if let LiteralType::Number(..) = l.get() {
+            return l;
+        }
+
+        self.arena.alloc(match l.get() {
+            LiteralType::Bool(b) => LiteralType::Number(Self::bool_to_number(&b)),
+            LiteralType::Null => LiteralType::Number(0.0),
+            LiteralType::Str(s) => match &s {
+                StrType::Loose(s1) => {
+                    if let Ok(n) = s1.parse() {
+                        LiteralType::Number(n)
+                    } else {
+                        LiteralType::Str(s.clone())
+                    }
+                }
+                StrType::Strict(_) => LiteralType::Str(s.clone()),
+            },
+            everything_else => everything_else.clone(),
+        })
     }
 
     #[inline(always)]

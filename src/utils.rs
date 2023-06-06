@@ -55,10 +55,10 @@ fn format_literal(literal: &LiteralType) -> String {
     }
 }
 
-pub fn pretty_print_literal(literal: LiteralType) {
+pub fn pretty_print_literal(literal: &LiteralType) {
     println_raw!("{}", format_literal_pretty(&literal));
 }
 
-pub fn print_literal(literal: LiteralType) {
+pub fn print_literal(literal: &LiteralType) {
     println_raw!("{}", format_literal(&literal));
 }

@@ -15,9 +15,11 @@ use crate::println_raw;
 
 type NoHashHashMap<K, V> = HashMap<K, V, BuildHasherDefault<NoHashHasher<usize>>>;
 
+use crate::interpreter::ArenaPtr;
+
 #[derive(Debug)]
 pub enum EnvVal {
-    Lt(LiteralType),
+    Lt(ArenaPtr),
     Fn(Rc<(Vec<TIdentifier>, Vec<BindedStmt>)>),
 }
 
@@ -129,7 +131,9 @@ impl Environment {
                 match self.scopes[*scopes.last().unwrap()].get(name) {
                     Some(val) => return val,
                     None => {
-                        if let None = scopes.pop() { break 'outer }
+                        if let None = scopes.pop() {
+                            break 'outer;
+                        }
                     }
                 }
             }
@@ -142,10 +146,10 @@ impl Environment {
     }
 }
 
-#[inline(always)]
-pub fn env_val_to_literal(env_val: &EnvVal) -> LiteralType {
-    match env_val {
-        EnvVal::Lt(literal) => literal.clone(),
-        EnvVal::Fn(..) => LiteralType::Str(StrType::Strict(Rc::new("[fn]".to_owned()))),
-    }
-}
+// #[inline(always)]
+// pub fn env_val_to_literal(env_val: &EnvVal) -> ype {
+//     match env_val {
+//         EnvVal::Lt(literal) => literal.clone(),
+//         EnvVal::Fn(..) => LiteralType::Str(StrType::Strict(Rc::new("[fn]".to_owned()))),
+//     }
+// }

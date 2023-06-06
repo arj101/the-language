@@ -58,7 +58,7 @@ pub enum Stmt {
 #[derive(Clone)]
 pub struct BindedStmt {
     pub stmt: BindingStmt,
-    pub exec: fn(&mut Interpreter, &BindingStmt) -> LiteralType,
+    pub exec: fn(&mut Interpreter, &BindingStmt) -> ArenaPtr,
 }
 
 impl Debug for BindedStmt {
@@ -72,7 +72,7 @@ impl Debug for BindedStmt {
 #[derive(Clone)]
 pub struct BindedExpr {
     pub expr: BindingExpr,
-    pub exec: fn(&mut Interpreter, &BindingExpr) -> LiteralType,
+    pub exec: fn(&mut Interpreter, &BindingExpr) -> ArenaPtr,
 }
 
 impl Debug for BindedExpr {
@@ -117,6 +117,8 @@ pub enum BindingStmt {
     },
 }
 
+use crate::interpreter::ArenaPtr;
+
 #[derive(Debug, Clone)]
 pub enum BindingExpr {
     Grouping(Box<BindedExpr>),
@@ -130,7 +132,7 @@ pub enum BindingExpr {
         right: Box<BindedExpr>,
     },
     Variable(TIdentifier),
-    Literal(LiteralType),
+    Literal(ArenaPtr),
     FnCall(TIdentifier, Vec<BindedExpr>),
     DebugVariable(DebugVariable),
     ArrayExpr(Vec<BindedExpr>),

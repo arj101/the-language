@@ -91,7 +91,7 @@ fn main() {
                             println_raw!("running interpreter:")
                         }
 
-                        interpreter.interpret(&ast, interner);
+                        interpreter.interpret(ast, interner);
                     }
 
                     if verbose_output {

@@ -99,7 +99,7 @@ impl Repl {
                                     if print_ast {
                                         println_raw!("ast: \n{:?}", ast);
                                     }
-                                    interpreter.interpret(&ast, interner);
+                                    interpreter.interpret(ast, interner);
                                 }
 
                                 is_running.store(false, sync::atomic::Ordering::Relaxed);
