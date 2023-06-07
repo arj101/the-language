@@ -796,9 +796,8 @@ impl Interpreter {
 
     #[inline(always)]
     fn less_equal(left: &LiteralType, right: &LiteralType) -> LiteralType {
-        let LiteralType::Bool(is_equal) = Self::equal(left, right) else { unreachable!() };
-        let LiteralType::Bool(is_less) = Self::less(left, right) else { unreachable!() };
-        LiteralType::Bool(is_equal || is_less)
+        let LiteralType::Bool(greater) = Self::greater(left, right) else { unreachable!() };
+        LiteralType::Bool(!greater)
     }
 
     #[inline(always)]
@@ -832,9 +831,8 @@ impl Interpreter {
 
     #[inline(always)]
     fn greater_equal(left: &LiteralType, right: &LiteralType) -> LiteralType {
-        let LiteralType::Bool(is_equal) = Self::equal(left, right) else { unreachable!() };
-        let LiteralType::Bool(is_greater) = Self::greater(left, right) else { unreachable!() };
-        LiteralType::Bool(is_equal || is_greater)
+        let LiteralType::Bool(less) = Self::less(left, right) else { unreachable!() };
+        LiteralType::Bool(!less)
     }
 
     #[inline(always)]
