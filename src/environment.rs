@@ -4,6 +4,7 @@ use crate::{
     tokens::TIdentifier,
 };
 use rustc_hash::FxHashMap;
+use string_interner::Symbol;
 use std::{borrow::BorrowMut, collections::HashMap, mem::MaybeUninit, rc::Rc, time::Instant};
 
 use nohash_hasher::NoHashHasher;
@@ -34,6 +35,8 @@ pub struct VarStack {
 }
 
 impl VarStack {
+
+
     #[inline]
     pub fn create(val: EnvVal, curr_scope: usize, visit_counter: *const ScopeVisitCounter) -> Self {
         let mut stack: [MaybeUninit<(EnvVal, usize, usize)>; 256] =
@@ -92,7 +95,7 @@ impl VarStack {
 }
 
 pub struct Environment {
-    vars: NoHashHashMap<StrSymbol, *mut VarStack>,
+    vars: Vec<Option<*mut VarStack>>,
 
     visit_counter: ScopeVisitCounter,
 
@@ -101,18 +104,29 @@ pub struct Environment {
 }
 
 impl Environment {
-    pub fn new() -> Self {
+    pub fn new(symbol_count: usize) -> Self {
+        let mut vars = Vec::with_capacity(symbol_count);
+        for _ in 0..symbol_count { vars.push(None) };
+
         Self {
             curr_scope: 0,
             visit_counter: [0; 65536],
-            vars: HashMap::with_capacity_and_hasher(16, BuildHasherDefault::default()),
+            vars,
+        }
+    }
+
+    pub fn expand_capacity(&mut self, symbol_count: usize) {
+        let curr_len = self.vars.len() as isize;
+        for _ in 0..(symbol_count as isize - curr_len).max(0) {
+            self.vars.push(None);
         }
     }
 
     #[inline(always)]
     pub fn define(&mut self, name: StrSymbol, value: EnvVal) {
-        if let Some(var_stack) = self.vars.get(&name) {
-            unsafe { &mut **var_stack }.define(value, self.curr_scope);
+        if let Some(var_stack) = self.vars[name.to_usize()] {
+            let var_stack: *mut VarStack = var_stack;
+            unsafe { &mut *var_stack }.define(value, self.curr_scope);
             return;
         }
 
@@ -123,12 +137,12 @@ impl Environment {
         ));
         let stack = Box::leak(stack) as *mut VarStack;
 
-        self.vars.insert(name, stack);
+        self.vars.insert(name.to_usize(), Some(stack));
     }
 
     #[inline]
     pub fn has_var(&self, name: &StrSymbol) -> bool {
-        self.vars.contains_key(name)
+        self.vars[name.to_usize()].is_some()
     }
 
     #[inline(always)]
@@ -148,30 +162,19 @@ impl Environment {
 
     #[inline(always)]
     pub fn update(&mut self, name: &StrSymbol, value: EnvVal) {
-        // if let Some(old_val) = self.vars[self.curr_scope].get_mut(name) {
-        //     *old_val = value;
-        //     return;
-        // }
-        //
-        // if let Some(scopes) = self.var_scope_map.borrow_mut().get_mut(name) {
-        //     while scopes.last().unwrap() > &self.curr_scope {
-        //         scopes.pop();
-        //     }
-        //     while !self.vars[*scopes.last().unwrap()].contains_key(name) {
-        //         scopes.pop();
-        //     }
-        //     if let Some(old_val) = self.vars[*scopes.last().unwrap()].get_mut(name) {
-        //         *old_val = value;
-        //     }
-        // }
+        if let Some(var_stack) = self.vars[name.to_usize()] {
+            let var_stack: *mut VarStack = var_stack;
+            return unsafe { &mut *var_stack }.define(value, self.curr_scope);
+        }
 
         println_raw!("{:?}: no such variable in scope", name);
     }
 
     #[inline(always)]
     pub fn get(&mut self, name: &StrSymbol) -> &EnvVal {
-        if let Some(var_stack) = self.vars.get(name) {
-            return unsafe { &mut **var_stack }.get(self.curr_scope);
+        if let Some(var_stack) = self.vars[name.to_usize()] {
+            let var_stack: *mut VarStack = var_stack;
+            return unsafe { &mut *var_stack }.get(self.curr_scope);
         }
 
         panic!("{:?}: no such variable in scope", name);

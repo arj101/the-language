@@ -54,6 +54,10 @@ impl Interpreter {
         }
     }
 
+    pub fn expand_env_capacity(&mut self, new_symbol_count: usize) {
+        self.env.expand_capacity(new_symbol_count)
+    }
+
     pub fn interpret(&mut self, stmts: &[Stmt], interner: StrInterner) {
         self.interner = interner;
         for stmt in stmts {

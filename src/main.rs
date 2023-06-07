@@ -59,7 +59,7 @@ fn main() {
     } else {
         let mut lexer = Lexer::new("");
         let mut parser = Parser::new(vec![], "".to_owned());
-        let global_env = Environment::new();
+        let global_env = Environment::new(4);
         let mut interpreter = Interpreter::new(false, global_env, Arc::new(AtomicBool::new(false)));
 
         for filename in args_filename {
@@ -91,6 +91,7 @@ fn main() {
                             println_raw!("running interpreter:")
                         }
 
+                        interpreter.expand_env_capacity(interner.len());
                         interpreter.interpret(&ast, interner);
                     }
 
