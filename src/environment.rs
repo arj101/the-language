@@ -1,11 +1,11 @@
 use crate::{
-    expr::{BindedStmt, LiteralType, Stmt, StrType},
+    expr::{BindedStmt, LiteralType, Stmt},
     tokens::StrSymbol,
     tokens::TIdentifier,
 };
 use rustc_hash::FxHashMap;
-use string_interner::Symbol;
 use std::{borrow::BorrowMut, collections::HashMap, mem::MaybeUninit, rc::Rc, time::Instant};
+use string_interner::Symbol;
 
 use nohash_hasher::NoHashHasher;
 use std::hash::BuildHasherDefault;
@@ -19,7 +19,7 @@ type NoHashHashMap<K, V> = HashMap<K, V, BuildHasherDefault<NoHashHasher<usize>>
 #[derive(Debug)]
 pub enum EnvVal {
     Lt(LiteralType),
-    Fn(Rc<(Vec<TIdentifier>, Vec<BindedStmt>)>),
+    Fn(*const (Vec<TIdentifier>, Vec<BindedStmt>)),
 }
 
 type ScopeVisitCounter = [usize; 65536];
@@ -35,8 +35,6 @@ pub struct VarStack {
 }
 
 impl VarStack {
-
-
     #[inline]
     pub fn create(val: EnvVal, curr_scope: usize, visit_counter: *const ScopeVisitCounter) -> Self {
         let mut stack: [MaybeUninit<(EnvVal, usize, usize)>; 256] =
@@ -106,7 +104,9 @@ pub struct Environment {
 impl Environment {
     pub fn new(symbol_count: usize) -> Self {
         let mut vars = Vec::with_capacity(symbol_count);
-        for _ in 0..symbol_count { vars.push(None) };
+        for _ in 0..symbol_count {
+            vars.push(None)
+        }
 
         Self {
             curr_scope: 0,
@@ -135,6 +135,8 @@ impl Environment {
             self.curr_scope,
             &self.visit_counter as *const ScopeVisitCounter,
         ));
+
+        //to avoid huge reallocations when self.vars need to grow
         let stack = Box::leak(stack) as *mut VarStack;
 
         self.vars.insert(name.to_usize(), Some(stack));
@@ -185,6 +187,6 @@ impl Environment {
 pub fn env_val_to_literal(env_val: &EnvVal) -> LiteralType {
     match env_val {
         EnvVal::Lt(literal) => literal.clone(),
-        EnvVal::Fn(..) => LiteralType::Str(StrType::Strict(Rc::new("[fn]".to_owned()))),
+        EnvVal::Fn(..) => LiteralType::Str(Box::leak(Box::new("[fn]".to_owned()))),
     }
 }

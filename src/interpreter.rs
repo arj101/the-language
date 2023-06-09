@@ -7,7 +7,7 @@ use crate::expr::BindedStmt;
 use crate::expr::BindingExpr;
 use crate::expr::BindingStmt;
 use crate::expr::DebugVariable;
-use crate::expr::{Expr, LiteralType, Stmt, StrType};
+use crate::expr::{Expr, LiteralType, Stmt };
 use crate::repl;
 use crate::tokens::StrInterner;
 use crate::tokens::TIdentifier;
@@ -23,6 +23,24 @@ type EnvScope = Environment;
 
 use std::rc::Rc;
 
+macro_rules! u {
+    ($unsafe_code:expr) => {
+        unsafe { $unsafe_code }
+    };
+}
+
+macro_rules! deref {
+    ($ptr:expr) => {
+        unsafe{ &**$ptr }
+    };
+}
+
+macro_rules! deref_mut {
+    ($ptr:expr) => {
+        unsafe { &mut **$ptr }
+    };
+}
+
 struct InterpreterFlags {
     return_backtrack: bool,
 }
@@ -34,6 +52,7 @@ impl Default for InterpreterFlags {
         }
     }
 }
+
 
 pub struct Interpreter {
     repl_mode: bool,
@@ -215,10 +234,10 @@ impl Interpreter {
                 if let Stmt::Block(stmts) = *body.clone() {
                     self.env.define(
                         ident.inner(),
-                        EnvVal::Fn(Rc::new((
+                        EnvVal::Fn(Box::leak(Box::new((
                             params.to_vec(),
                             stmts.iter().map(Self::bind).collect(),
-                        ))),
+                        ))) as *const _),
                     )
                 };
                 LiteralType::Null
@@ -349,10 +368,10 @@ impl Interpreter {
         let BindingStmt::FunctionDef { ident, params, body } = stmt else { unreachable!() };
 
         if let BindingStmt::Block(stmts) = &body.stmt {
-            self.env.define(
-                ident.inner(),
-                EnvVal::Fn(Rc::new((params.to_vec(), stmts.to_vec()))),
-            )
+            let func = (params.to_vec(), stmts.to_vec());
+            let func = Box::new(func);
+            let func = Box::leak(func);
+            self.env.define(ident.inner(), EnvVal::Fn(func as *const _))
         };
         LiteralType::Null
     }
@@ -444,13 +463,13 @@ impl Interpreter {
         let mut right = (right.exec)(self, &right.expr);
 
         match (&left, &right) {
-            (LiteralType::Number(_), LiteralType::Str(StrType::Loose(s))) => {
-                if let Ok(n) = s.parse::<f64>() {
+            (LiteralType::Number(_), LiteralType::Str(s)) => {
+                if let Ok(n) = (unsafe { &**s }).parse::<f64>() {
                     right = LiteralType::Number(n)
                 }
             }
-            (LiteralType::Str(StrType::Loose(s)), LiteralType::Number(_)) => {
-                if let Ok(n) = s.parse::<f64>() {
+            (LiteralType::Str(s), LiteralType::Number(_)) => {
+                if let Ok(n) = (unsafe { &**s}).parse::<f64>() {
                     left = LiteralType::Number(n)
                 }
             }
@@ -508,14 +527,13 @@ impl Interpreter {
                 LiteralType::Number(n) => LiteralType::Bool(Self::number_to_bool(n)),
                 LiteralType::Null => LiteralType::Bool(true),
                 LiteralType::Str(s) => {
-                    let s = Self::str_type_inner_ref(&s);
-                    if s.is_empty() {
+                    if u!(&**s).is_empty() {
                         LiteralType::Bool(true)
                     } else {
                         LiteralType::Bool(false)
                     }
                 }
-                LiteralType::Array(a) => LiteralType::Bool(!a.is_empty()),
+                LiteralType::Array(a) => LiteralType::Bool(!deref!(a).is_empty()),
             },
             _ => unreachable!(),
         };
@@ -526,15 +544,8 @@ impl Interpreter {
         let BindingExpr::FnCall(ident, args) = fn_call else { unreachable!() };
         self.push_env();
 
-        let fn_def = self.env.get(&ident.0);
-
-        let fn_def = if let EnvVal::Fn(fn_def) = fn_def {
-            Rc::clone(&fn_def)
-        } else {
-            panic!("Cannot call a variable as a function")
-        };
-
-        let (params, stmts) = fn_def.as_ref();
+        let EnvVal::Fn(fn_ptr) = self.env.get(&ident.0) else { panic!("Cannot call a variable as function!") };
+        let (params, stmts) = unsafe { &**fn_ptr };
 
         for (i, param) in params.iter().enumerate() {
             if let Some(val) = args.get(i) {
@@ -559,7 +570,7 @@ impl Interpreter {
 
         match self.env.get(&ident.0) {
             EnvVal::Lt(literal) => literal.clone(),
-            EnvVal::Fn(_) => LiteralType::Str(StrType::Strict(Rc::new(format!(
+            EnvVal::Fn(_) => LiteralType::Str(Box::leak(Box::new(format!(
                 "[fun {}]",
                 self.interner.resolve(ident.inner()).unwrap()
             )))),
@@ -574,7 +585,7 @@ impl Interpreter {
             evaled_array.push((expr.exec)(self, &expr.expr))
         }
 
-        LiteralType::Array(Rc::new(evaled_array))
+        LiteralType::Array(Box::leak(Box::new(evaled_array)))
     }
 
     fn eval_binded_debug_var(&mut self, var: &BindingExpr) -> LiteralType {
@@ -634,7 +645,7 @@ impl Interpreter {
             },
 
             Expr::ArrayExpr(arr) => BindedExpr {
-                expr: BindingExpr::ArrayExpr(arr.iter().map(Self::bind_expr).collect()),
+                expr: BindingExpr::ArrayExpr(deref!(arr).iter().map(Self::bind_expr).collect()),
                 exec: Self::eval_binded_array,
             },
 
@@ -657,18 +668,18 @@ impl Interpreter {
             Expr::Literal(l) => l.to_owned(),
             Expr::Variable(name) => match self.env.get(&name.0) {
                 EnvVal::Lt(literal) => literal.clone(),
-                EnvVal::Fn(_) => LiteralType::Str(StrType::Strict(Rc::new(format!(
+                EnvVal::Fn(_) => LiteralType::Str(Box::leak(Box::new(format!(
                     "[fun {}]",
                     self.interner.resolve(name.inner()).unwrap()
                 )))),
             },
             Expr::ArrayExpr(array) => {
                 let mut array_evaled = vec![];
-                for expr in array {
+                for expr in deref!(array) {
                     array_evaled.push(self.eval_expr(expr))
                 }
 
-                LiteralType::Array(Rc::new(array_evaled))
+                LiteralType::Array(Box::leak(Box::new(array_evaled)))
             }
             Expr::DebugVariable(var) => match var {
                 DebugVariable::Time => LiteralType::Number(
@@ -681,13 +692,11 @@ impl Interpreter {
             Expr::FnCall(ident, args) => {
                 self.push_env();
 
-                let fn_def = self.env.get(&ident.0);
-                let fn_def = if let EnvVal::Fn(fn_def) = fn_def {
-                    Rc::clone(&fn_def)
+                let (params, stmts) = if let EnvVal::Fn(fn_def) = self.env.get(&ident.0) {
+                    unsafe { &**fn_def }
                 } else {
                     panic!("Cannot call a variable as a function")
                 };
-                let (params, stmts) = fn_def.as_ref();
 
                 for (i, param) in params.iter().enumerate() {
                     if let Some(val) = args.get(i) {
@@ -738,13 +747,13 @@ impl Interpreter {
         let mut right = self.eval_expr(right);
 
         match (&left, &right) {
-            (LiteralType::Number(_), LiteralType::Str(StrType::Loose(s))) => {
-                if let Ok(n) = s.parse::<f64>() {
+            (LiteralType::Number(_), LiteralType::Str(s)) => {
+                if let Ok(n) = deref!(s).parse::<f64>() {
                     right = LiteralType::Number(n)
                 }
             }
-            (LiteralType::Str(StrType::Loose(s)), LiteralType::Number(_)) => {
-                if let Ok(n) = s.parse::<f64>() {
+            (LiteralType::Str(s), LiteralType::Number(_)) => {
+                if let Ok(n) = deref!(s).parse::<f64>() {
                     left = LiteralType::Number(n)
                 }
             }
@@ -809,16 +818,14 @@ impl Interpreter {
         match (left, right) {
             (LiteralType::Number(a), LiteralType::Number(b)) => LiteralType::Bool(a < b),
             (LiteralType::Str(a), LiteralType::Str(b)) => {
-                let a = Self::str_type_inner(a);
-                let b = Self::str_type_inner(b);
-                LiteralType::Bool(a.len() < b.len())
+                LiteralType::Bool(u!{&**a}.len() < u!{&**b}.len())
             }
             (LiteralType::Bool(a), LiteralType::Bool(b)) => {
                 LiteralType::Bool(Self::bool_to_number(a) < Self::bool_to_number(b))
             }
             (LiteralType::Str(_), LiteralType::Null) => LiteralType::Bool(true),
             (LiteralType::Null, LiteralType::Str(b)) => {
-                LiteralType::Bool(!Self::str_type_inner(b).is_empty())
+                LiteralType::Bool(u!{&**b}.is_empty())
             }
             (l, r) => {
                 if let (LiteralType::Number(a), LiteralType::Number(b)) = (
@@ -844,15 +851,13 @@ impl Interpreter {
         match (left, right) {
             (LiteralType::Number(a), LiteralType::Number(b)) => LiteralType::Bool(a > b),
             (LiteralType::Str(a), LiteralType::Str(b)) => {
-                let a = Self::str_type_inner(&a);
-                let b = Self::str_type_inner(&b);
-                LiteralType::Bool(a.len() > b.len())
+                LiteralType::Bool(u!(&**a).len() > u!(&**b).len())
             }
             (LiteralType::Bool(a), LiteralType::Bool(b)) => {
                 LiteralType::Bool(Self::bool_to_number(a) > Self::bool_to_number(b))
             }
             (LiteralType::Str(a), LiteralType::Null) => {
-                LiteralType::Bool(!Self::str_type_inner(&a).is_empty())
+                LiteralType::Bool(!u!(&**a).is_empty())
             }
             (LiteralType::Null, LiteralType::Str(_)) => LiteralType::Bool(false),
             (l, r) => {
@@ -880,10 +885,8 @@ impl Interpreter {
             (LiteralType::Number(a), LiteralType::Number(b)) => LiteralType::Bool(a == b),
             (LiteralType::Bool(a), LiteralType::Bool(b)) => LiteralType::Bool(a == b),
             (LiteralType::Str(a), LiteralType::Str(b)) => {
-                let a = Self::str_type_inner(a);
-                let b = Self::str_type_inner(b);
 
-                LiteralType::Bool(a == b)
+                LiteralType::Bool(u!(&**a) == u!(&**b))
             }
             (LiteralType::Null, LiteralType::Null) => LiteralType::Bool(true),
             _ => LiteralType::Bool(false),
@@ -921,12 +924,9 @@ impl Interpreter {
     }
 
     #[inline(always)]
-    fn str_multiplication(left: StrType, n: f64) -> StrType {
+    fn str_multiplication(left: *mut String, n: f64) -> *mut String {
         let n = n.floor() as usize;
-        match left {
-            StrType::Loose(s) => StrType::Loose(Rc::new(s.repeat(n))),
-            StrType::Strict(s) => StrType::Strict(Rc::new(s.repeat(n))),
-        }
+        Box::leak(Box::new(deref!(left).repeat(n)))
     }
 
     #[inline(always)]
@@ -938,26 +938,18 @@ impl Interpreter {
             (LiteralType::Str(s), LiteralType::Number(n)) => {
                 let n = n.floor() as usize;
 
-                let create_chunks = |s: String, strict_string: bool| {
-                    let c = s.chars().collect::<Vec<char>>();
-                    LiteralType::Array(Rc::new(
+                let create_chunks = |s: *mut String| {
+                    let c = deref!(s).chars().collect::<Vec<char>>();
+                    LiteralType::Array(Box::leak(Box::new(
                         c.chunks(n)
                             .map(|c| {
                                 let s = c.iter().collect::<String>();
-                                if strict_string {
-                                    LiteralType::Str(StrType::Strict(Rc::new(s)))
-                                } else {
-                                    LiteralType::Str(StrType::Loose(Rc::new(s)))
-                                }
+                                LiteralType::Str(Box::leak(Box::new(s)))
                             })
                             .collect::<Vec<LiteralType>>(),
-                    ))
+                    )))
                 };
-
-                match s {
-                    StrType::Loose(s) => create_chunks(s.to_string(), false),
-                    StrType::Strict(s) => create_chunks(s.to_string(), true),
-                }
+                create_chunks(s)
             }
             _ => LiteralType::Number(std::f64::NAN),
         }
@@ -981,20 +973,20 @@ impl Interpreter {
         match (&left, &right) {
             (LiteralType::Number(a), LiteralType::Number(b)) => LiteralType::Number(a + b),
             (LiteralType::Array(array), c) => {
-                let mut array_new = array.as_ref().clone();
+                let mut array_new = deref!(array).clone();
                 if let LiteralType::Array(array2) = c {
-                    for elt in array2.as_ref() {
+                    for elt in deref!(array2) {
                         array_new.push(elt.clone())
                     }
                 } else {
                     array_new.push(c.clone().clone());
                 };
-                LiteralType::Array(Rc::new(array_new))
+                LiteralType::Array(Box::leak(Box::new(array_new)))
             }
             (c, LiteralType::Array(array)) => {
-                let mut array_new = array.as_ref().clone();
+                let mut array_new = deref!(array).clone();
                 if let LiteralType::Array(array2) = c {
-                    for elt in array2.as_ref() {
+                    for elt in deref!(array2) {
                         array_new.push(elt.clone())
                     }
                 } else {
@@ -1004,22 +996,20 @@ impl Interpreter {
                         array_new.insert(0, c.clone().clone());
                     }
                 };
-                LiteralType::Array(Rc::new(array_new))
+                LiteralType::Array(Box::leak(Box::new(array_new)))
             }
             (LiteralType::Str(s), LiteralType::Str(s1)) => {
-                LiteralType::Str(Self::str_addition(s, s1))
+                LiteralType::Str(Self::str_addition(*s, *s1))
             }
             (LiteralType::Bool(b0), LiteralType::Bool(b1)) => {
                 LiteralType::Number(Self::bool_to_number(b0) + Self::bool_to_number(b1))
             }
-            (LiteralType::Str(StrType::Loose(s)), _left) => LiteralType::Str(StrType::Loose(
-                Rc::new(s.to_string() + &Self::literal_to_str(&right)),
+            (LiteralType::Str(s), _left) => LiteralType::Str(Box::leak(
+                Box::new(deref!(s).to_string() + &Self::literal_to_str(&right)),
             )),
-            (_right, LiteralType::Str(StrType::Loose(s))) => {
-                LiteralType::Str(StrType::Loose(Rc::new(Self::literal_to_str(&left) + &s)))
+            (_right, LiteralType::Str(s)) => {
+                LiteralType::Str(Box::leak(Box::new(Self::literal_to_str(&left) + deref!(s))))
             }
-            (LiteralType::Str(StrType::Strict(_)), _)
-            | (_, LiteralType::Str(StrType::Strict(_))) => LiteralType::Number(std::f64::NAN),
             (l, r) => {
                 let (l, r) = (l.clone(), r.clone());
                 LiteralType::Number(
@@ -1037,15 +1027,8 @@ impl Interpreter {
     }
 
     #[inline(always)]
-    fn str_addition(s0: &StrType, s1: &StrType) -> StrType {
-        match (&s0, s1) {
-            (StrType::Strict(_), _) | (_, StrType::Strict(_)) => StrType::Strict(Rc::new(
-                Self::str_type_inner(s0).to_string() + Self::str_type_inner_ref(s1),
-            )),
-            _ => StrType::Loose(Rc::new(
-                Self::str_type_inner(s0).to_string() + Self::str_type_inner_ref(s1),
-            )),
-        }
+    fn str_addition(s0: *mut String, s1: *mut String) -> *mut String {
+        Box::leak(Box::new(deref!(s0).to_owned() + deref!(s1)))
     }
 
     fn eval_unary(&mut self, operator: &Token, right: &Expr) -> LiteralType {
@@ -1064,14 +1047,9 @@ impl Interpreter {
                 LiteralType::Number(n) => LiteralType::Bool(Self::number_to_bool(n)),
                 LiteralType::Null => LiteralType::Bool(true),
                 LiteralType::Str(s) => {
-                    let s = Self::str_type_inner_ref(&s);
-                    if s.is_empty() {
-                        LiteralType::Bool(true)
-                    } else {
-                        LiteralType::Bool(false)
-                    }
+                    LiteralType::Bool(deref!(s).is_empty())
                 }
-                LiteralType::Array(a) => LiteralType::Bool(!a.is_empty()),
+                LiteralType::Array(a) => LiteralType::Bool(!deref!(a).is_empty()),
             },
             _ => unreachable!(),
         };
@@ -1085,25 +1063,20 @@ impl Interpreter {
             LiteralType::Bool(b) => LiteralType::Number(Self::bool_to_number(&b)),
             LiteralType::Null => LiteralType::Number(0.0),
             LiteralType::Str(s) => {
-                let s = if let StrType::Loose(s) = s {
-                    s
-                } else {
-                    return LiteralType::Number(std::f64::NAN);
-                };
-                if let Ok(n) = s.parse() {
+                if let Ok(n) = deref!(s).parse() {
                     LiteralType::Number(n)
                 } else {
                     LiteralType::Number(std::f64::NAN)
                 }
             }
-            LiteralType::Array(a) => LiteralType::Number(a.len() as f64),
+            LiteralType::Array(a) => LiteralType::Number(deref!(a).len() as f64),
         }
     }
 
     #[inline(always)]
     fn literal_to_str(l: &LiteralType) -> String {
         match l {
-            LiteralType::Str(s) => Self::str_type_inner(s).to_string(),
+            LiteralType::Str(s) => deref!(s).to_string(),
             LiteralType::Bool(b) => b.to_string(),
             LiteralType::Number(n) => n.to_string(),
             LiteralType::Null => "null".to_owned(),
@@ -1120,15 +1093,12 @@ impl Interpreter {
         match l {
             LiteralType::Bool(b) => LiteralType::Number(Self::bool_to_number(&b)),
             LiteralType::Null => LiteralType::Number(0.0),
-            LiteralType::Str(s) => match &s {
-                StrType::Loose(s1) => {
-                    if let Ok(n) = s1.parse() {
+            LiteralType::Str(s) =>  {
+                    if let Ok(n) = deref!(s).parse() {
                         LiteralType::Number(n)
                     } else {
                         LiteralType::Str(s)
                     }
-                }
-                StrType::Strict(_) => LiteralType::Str(s),
             },
             everything_else => everything_else,
         }
@@ -1138,24 +1108,13 @@ impl Interpreter {
     fn to_bool(l: LiteralType) -> bool {
         match l {
             LiteralType::Number(number) => number >= 1.0,
-            LiteralType::Str(s) => Self::str_type_inner(&s).len() > 0,
+            LiteralType::Str(s) => deref!(s).len() > 0,
             LiteralType::Bool(b) => b,
             LiteralType::Null => false,
-            LiteralType::Array(arr) => !arr.is_empty(),
+            LiteralType::Array(arr) => !deref!(arr).is_empty(),
         }
     }
 
-    #[inline(always)]
-    fn str_type_inner(s: &StrType) -> &str {
-        let (StrType::Loose(s) | StrType::Strict(s)) = s;
-        s
-    }
-
-    #[inline(always)]
-    fn str_type_inner_ref<'b>(s: &'b StrType) -> &'b String {
-        let (StrType::Loose(s) | StrType::Strict(s)) = s;
-        s
-    }
 
     #[inline(always)]
     fn bool_to_number(b: &bool) -> f64 {

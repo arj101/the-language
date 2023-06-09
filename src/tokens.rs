@@ -44,8 +44,7 @@ pub enum TokenType {
     LessEqual,
 
     Identifier(TIdentifier),
-    StrLoose(String),
-    StrStrict(String),
+    Str(String),
     Number(f64),
 
     Fun,

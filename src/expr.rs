@@ -6,18 +6,12 @@ use rustc_hash::FxHashMap;
 use std::fmt::Debug;
 use std::rc::Rc;
 
-#[derive(Debug, Clone)]
-pub enum StrType {
-    Strict(Rc<String>),
-    Loose(Rc<String>),
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum LiteralType {
     Number(f64),
-    Str(StrType),
+    Str(*mut String),
     Bool(bool),
-    Array(Rc<Vec<LiteralType>>),
+    Array(*mut Vec<LiteralType>),
     Null,
 }
 
@@ -152,7 +146,7 @@ pub enum Expr {
     Literal(LiteralType),
     FnCall(TIdentifier, Vec<Expr>),
     DebugVariable(DebugVariable),
-    ArrayExpr(Vec<Expr>),
+    ArrayExpr(*mut Vec<Expr>),
 }
 
 #[derive(Debug, Clone)]

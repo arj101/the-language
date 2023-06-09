@@ -1,5 +1,4 @@
 use crate::expr::LiteralType;
-use crate::expr::StrType;
 
 use crate::print_raw;
 use crate::println_raw;
@@ -16,19 +15,16 @@ fn format_literal_pretty(literal: &LiteralType) -> String {
         LiteralType::Bool(b) => {
             format!("{}{}{}", color::Fg(Cyan), b, color::Fg(color::Reset))
         }
-        LiteralType::Str(StrType::Strict(s)) => {
-            format!("{}\"{}\"{}", color::Fg(Green), s, color::Fg(color::Reset))
-        }
-        LiteralType::Str(StrType::Loose(s)) => format!(
+        LiteralType::Str(s) => format!(
             "{}'{}'{}",
             color::Fg(LightGreen),
-            s,
+            unsafe{&**s},
             color::Fg(color::Reset)
         ),
         LiteralType::Array(array) => {
             format!(
                 "[ {} ]",
-                array
+                unsafe{&**array}
                     .iter()
                     .map(format_literal_pretty)
                     .collect::<Vec<String>>()
@@ -43,10 +39,10 @@ fn format_literal(literal: &LiteralType) -> String {
         LiteralType::Number(n) => format!("{n}"),
         LiteralType::Null => format!("null"),
         LiteralType::Bool(b) => format!("{b}"),
-        LiteralType::Str(StrType::Strict(s) | StrType::Loose(s)) => format!("{s}"),
+        LiteralType::Str(s) => format!("{}", unsafe{&**s}),
         LiteralType::Array(array) => format!(
             "[ {} ]",
-            array
+            unsafe {&**array}
                 .iter()
                 .map(format_literal)
                 .collect::<Vec<String>>()

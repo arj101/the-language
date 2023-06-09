@@ -80,7 +80,8 @@ impl Repl {
 
                 let mut lexer = Lexer::new("");
                 let mut parser = Parser::new(vec![], "".to_owned());
-                let mut interpreter = Interpreter::new(true, Environment::new(16), stop_signal_clone);
+                let mut interpreter =
+                    Interpreter::new(true, Environment::new(16), stop_signal_clone);
 
                 'outer: loop {
                     if let Ok(msg) = rx.try_recv() {
@@ -99,7 +100,7 @@ impl Repl {
                                     if print_ast {
                                         println_raw!("ast: \n{:?}", ast);
                                     }
-                                    
+
                                     interpreter.expand_env_capacity(interner.len());
                                     interpreter.interpret(&ast, interner);
                                 }

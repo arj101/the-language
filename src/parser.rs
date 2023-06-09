@@ -1,4 +1,4 @@
-use crate::expr::{DebugVariable, Expr, LiteralType, Stmt, StrType};
+use crate::expr::{DebugVariable, Expr, LiteralType, Stmt };
 use crate::print_raw;
 use crate::println_raw;
 use crate::tokens::tokens;
@@ -504,17 +504,9 @@ impl Parser {
             return Ok(Expr::Literal(LiteralType::Null));
         }
 
-        if self.match_t(&[StrStrict(String::new()), StrLoose(String::new())]) {
-            use std::rc::Rc;
-            return match &self.previous().t_type {
-                StrStrict(s) => Ok(Expr::Literal(LiteralType::Str(StrType::Strict(Rc::new(
-                    s.clone(),
-                ))))),
-                StrLoose(s) => Ok(Expr::Literal(LiteralType::Str(StrType::Loose(Rc::new(
-                    s.clone(),
-                ))))),
-                _ => unreachable!(),
-            };
+        if self.match_t(&[Str(String::new())]) {
+            let TokenType::Str(s) = &self.previous().t_type else { unreachable!() };
+            return Ok(Expr::Literal(LiteralType::Str(Box::leak(Box::new(s.to_owned())))));
         }
 
         if self.match_t(&[Number(0.)]) {
@@ -535,14 +527,14 @@ impl Parser {
             let mut array = vec![];
 
             if self.match_t(&[RightSquareBrace]) {
-                return Ok(Expr::ArrayExpr(array));
+                return Ok(Expr::ArrayExpr(Box::leak(Box::new(array))));
             }
             array.push(self.expression()?);
 
             loop {
                 self.match_t(&[Comma]);
                 if self.match_t(&[RightSquareBrace]) {
-                    return Ok(Expr::ArrayExpr(array));
+                    return Ok(Expr::ArrayExpr(Box::leak(Box::new(array))));
                 }
 
                 array.push(self.expression()?);

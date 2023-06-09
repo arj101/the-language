@@ -171,11 +171,7 @@ impl Lexer {
         let str = self.source[self.start + 1..self.current - 1]
             .iter()
             .collect();
-        if is_strict {
-            self.add_token(TokenType::StrStrict(str));
-        } else {
-            self.add_token(TokenType::StrLoose(str));
-        }
+        self.add_token(TokenType::Str(str));
     }
 
     fn number(&mut self) {
