@@ -3,3 +3,5 @@
 op.txt
 flamegraph.svg
 perf.*
+objdump.asm
+.repl_history

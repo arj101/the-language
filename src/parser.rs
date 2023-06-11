@@ -1,4 +1,4 @@
-use crate::expr::{DebugVariable, Expr, LiteralType, Stmt };
+use crate::expr::{DebugVariable, Expr, LiteralType, Stmt};
 use crate::print_raw;
 use crate::println_raw;
 use crate::tokens::tokens;
@@ -9,6 +9,7 @@ use idk::track;
 use idk::tracker_drive_struct;
 use rustc_hash::FxHashMap;
 
+use crate::expr::BinaryOp;
 use crate::tokens::{StrInterner, StrSymbol};
 
 struct ParserState {
@@ -258,7 +259,7 @@ impl Parser {
                     id: name.clone(),
                     expr: Expr::Binary {
                         left: Box::new(Expr::Variable(name)),
-                        operator: operator.into_new($token_type),
+                        operator: Self::to_binary_op(&operator.into_new($token_type)),
                         right: Box::new(self.expression()?),
                     },
                 }
@@ -411,16 +412,35 @@ impl Parser {
         self.equality()
     }
 
+    fn to_binary_op(token: &Token) -> BinaryOp {
+        match token.t_type {
+            TokenType::Plus => BinaryOp::Add,
+            TokenType::Minus => BinaryOp::Sub,
+            TokenType::Star => BinaryOp::Mult,
+            TokenType::Slash => BinaryOp::Div,
+            TokenType::StarStar => BinaryOp::Exp,
+            TokenType::Percentage => BinaryOp::Mod,
+            TokenType::EqualEqual => BinaryOp::Eq,
+            TokenType::BangEqual => BinaryOp::NEq,
+            TokenType::Greater => BinaryOp::Gt,
+            TokenType::GreaterEqual => BinaryOp::GtEq,
+            TokenType::Less => BinaryOp::Lt,
+            TokenType::LessEqual => BinaryOp::LtEq,
+            _ => unreachable!(),
+        }
+    }
+
     #[track]
     fn equality(&mut self) -> Result<Expr, String> {
         let mut expr = self.comparison()?;
 
         while self.match_t(&[BangEqual, EqualEqual]) {
             let operator = self.previous().clone();
+
             let right = Box::new(self.comparison()?);
             expr = Expr::Binary {
                 left: Box::new(expr),
-                operator,
+                operator: Self::to_binary_op(&operator),
                 right,
             };
         }
@@ -437,7 +457,7 @@ impl Parser {
             let right = Box::new(self.term()?);
             expr = Expr::Binary {
                 left: Box::new(expr),
-                operator,
+                operator: Self::to_binary_op(&operator),
                 right,
             }
         }
@@ -454,7 +474,7 @@ impl Parser {
             let right = Box::new(self.factor()?);
             expr = Expr::Binary {
                 left: Box::new(expr),
-                operator,
+                operator: Self::to_binary_op(&operator),
                 right,
             }
         }
@@ -471,7 +491,7 @@ impl Parser {
             let right = Box::new(self.unary()?);
             expr = Expr::Binary {
                 left: Box::new(expr),
-                operator,
+                operator: Self::to_binary_op(&operator),
                 right,
             }
         }
@@ -506,7 +526,9 @@ impl Parser {
 
         if self.match_t(&[Str(String::new())]) {
             let TokenType::Str(s) = &self.previous().t_type else { unreachable!() };
-            return Ok(Expr::Literal(LiteralType::Str(Box::leak(Box::new(s.to_owned())))));
+            return Ok(Expr::Literal(LiteralType::Str(Box::leak(Box::new(
+                s.to_owned(),
+            )))));
         }
 
         if self.match_t(&[Number(0.)]) {

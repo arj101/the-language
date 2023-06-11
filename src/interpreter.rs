@@ -2,12 +2,13 @@ use syn::token::Fn;
 
 use crate::environment::EnvVal;
 use crate::environment::Environment;
+use crate::expr::BinaryOp;
 use crate::expr::BindedExpr;
 use crate::expr::BindedStmt;
 use crate::expr::BindingExpr;
 use crate::expr::BindingStmt;
 use crate::expr::DebugVariable;
-use crate::expr::{Expr, LiteralType, Stmt };
+use crate::expr::{Expr, LiteralType, Stmt};
 use crate::repl;
 use crate::tokens::StrInterner;
 use crate::tokens::TIdentifier;
@@ -31,7 +32,7 @@ macro_rules! u {
 
 macro_rules! deref {
     ($ptr:expr) => {
-        unsafe{ &**$ptr }
+        unsafe { &**$ptr }
     };
 }
 
@@ -39,6 +40,11 @@ macro_rules! deref_mut {
     ($ptr:expr) => {
         unsafe { &mut **$ptr }
     };
+}
+
+#[cfg(not(debug_assertions))]
+macro_rules! unreachable {
+    () =>{ unsafe { std::hint::unreachable_unchecked() } }
 }
 
 struct InterpreterFlags {
@@ -52,7 +58,6 @@ impl Default for InterpreterFlags {
         }
     }
 }
-
 
 pub struct Interpreter {
     repl_mode: bool,
@@ -453,38 +458,18 @@ impl Interpreter {
 
     fn eval_binded_literal(&mut self, lt: &BindingExpr) -> LiteralType {
         let BindingExpr::Literal(lt) = lt else { unreachable!() };
-        lt.clone()
+        *lt
     }
 
     fn eval_binded_binary(&mut self, binary: &BindingExpr) -> LiteralType {
         let BindingExpr::Binary { left, operator, right } = binary else { unreachable!() };
 
-        let mut left = (left.exec)(self, &left.expr);
-        let mut right = (right.exec)(self, &right.expr);
-
-        match (&left, &right) {
-            (LiteralType::Number(_), LiteralType::Str(s)) => {
-                if let Ok(n) = (unsafe { &**s }).parse::<f64>() {
-                    right = LiteralType::Number(n)
-                }
-            }
-            (LiteralType::Str(s), LiteralType::Number(_)) => {
-                if let Ok(n) = (unsafe { &**s}).parse::<f64>() {
-                    left = LiteralType::Number(n)
-                }
-            }
-            (LiteralType::Number(_), LiteralType::Bool(b)) => {
-                right = LiteralType::Number(Self::bool_to_number(b))
-            }
-            (LiteralType::Bool(b), LiteralType::Number(_)) => {
-                left = LiteralType::Number(Self::bool_to_number(b))
-            }
-            _ => (),
-        }
+        let left = (left.exec)(self, &left.expr);
+        let  right = (right.exec)(self, &right.expr);
 
         macro_rules! eval {
             ($( $token:pat => $function:expr ),* $(,)?) => {
-                match operator.t_type {
+                match operator {
                     $(
                          $token => $function,
                      )*
@@ -493,20 +478,22 @@ impl Interpreter {
             };
         }
 
-        use TokenType::*;
+        use crate::expr::BinaryOp::*;
+
+        
         eval! {
-            Plus => Self::addition(&left, &right),
-            Minus => Self::subtraction(left, right),
-            Slash => Self::division(left, right),
-            Star => Self::multiplication(left, right),
-            StarStar => Self::exponentiation(left, right),
-            EqualEqual => Self::equal(&left, &right),
-            BangEqual => Self::not_equal(&left, &right),
-            Greater => Self::greater(&left, &right),
-            GreaterEqual => Self::greater_equal(&left, &right),
-            Less => Self::less(&left, &right),
-            LessEqual => Self::less_equal(&left, &right),
-            Percentage => Self::modulus(left, right),
+            Add => Self::addition(&left, &right),
+            Sub => Self::subtraction(left, right),
+            Div => Self::division(left, right),
+            Mult  => Self::multiplication(left, right),
+            Exp => Self::exponentiation(left, right),
+            Eq => Self::equal(&left, &right),
+            NEq => Self::not_equal(&left, &right),
+            Gt => Self::greater(&left, &right),
+            GtEq => Self::greater_equal(&left, &right),
+            Lt => Self::less(&left, &right),
+            LtEq => Self::less_equal(&left, &right),
+            Mod => Self::modulus(left, right),
         }
     }
 
@@ -569,7 +556,7 @@ impl Interpreter {
         let BindingExpr::Variable(ident) = var else { unreachable!() };
 
         match self.env.get(&ident.0) {
-            EnvVal::Lt(literal) => literal.clone(),
+            EnvVal::Lt(literal) => *literal,
             EnvVal::Fn(_) => LiteralType::Str(Box::leak(Box::new(format!(
                 "[fun {}]",
                 self.interner.resolve(ident.inner()).unwrap()
@@ -724,10 +711,8 @@ impl Interpreter {
             self.push_env();
         }
 
-        let mut rt_val = LiteralType::Null;
-
         for stmt in stmts {
-            rt_val = (stmt.exec)(self, &stmt.stmt);
+            let rt_val = (stmt.exec)(self, &stmt.stmt);
             if self.flags.return_backtrack {
                 if new_scope {
                     self.pop_env();
@@ -742,7 +727,7 @@ impl Interpreter {
         LiteralType::Null
     }
 
-    fn eval_binary(&mut self, left: &Expr, operator: &Token, right: &Expr) -> LiteralType {
+    fn eval_binary(&mut self, left: &Expr, operator: &BinaryOp, right: &Expr) -> LiteralType {
         let mut left = self.eval_expr(left);
         let mut right = self.eval_expr(right);
 
@@ -768,7 +753,7 @@ impl Interpreter {
 
         macro_rules! eval {
             ($( $token:pat => $function:expr ),* $(,)?) => {
-                match operator.t_type {
+                match operator {
                     $(
                          $token => $function,
                      )*
@@ -777,24 +762,25 @@ impl Interpreter {
             };
         }
 
-        use TokenType::*;
+        use crate::expr::BinaryOp::*;
+
         eval! {
-            Plus => Self::addition(&left, &right),
-            Minus => Self::subtraction(left, right),
-            Slash => Self::division(left, right),
-            Star => Self::multiplication(left, right),
-            StarStar => Self::exponentiation(left, right),
-            EqualEqual => Self::equal(&left, &right),
-            BangEqual => Self::not_equal(&left, &right),
-            Greater => Self::greater(&left, &right),
-            GreaterEqual => Self::greater_equal(&left, &right),
-            Less => Self::less(&left, &right),
-            LessEqual => Self::less_equal(&left, &right),
-            Percentage => Self::modulus(left, right),
+            Add => Self::addition(&left, &right),
+            Sub => Self::subtraction(left, right),
+            Div => Self::division(left, right),
+            Mult  => Self::multiplication(left, right),
+            Exp => Self::exponentiation(left, right),
+            Eq => Self::equal(&left, &right),
+            NEq => Self::not_equal(&left, &right),
+            Gt => Self::greater(&left, &right),
+            GtEq => Self::greater_equal(&left, &right),
+            Lt => Self::less(&left, &right),
+            LtEq => Self::less_equal(&left, &right),
+            Mod => Self::modulus(left, right),
         }
     }
 
-    #[inline(always)]
+    // #[inline(always)]
     fn modulus(left: LiteralType, right: LiteralType) -> LiteralType {
         let left = Self::try_to_number(left);
         let right = Self::try_to_number(right);
@@ -807,26 +793,24 @@ impl Interpreter {
         )
     }
 
-    #[inline(always)]
+    // #[inline(always)]
     fn less_equal(left: &LiteralType, right: &LiteralType) -> LiteralType {
         let LiteralType::Bool(greater) = Self::greater(left, right) else { unreachable!() };
         LiteralType::Bool(!greater)
     }
 
-    #[inline(always)]
+    // #[inline(always)]
     fn less(left: &LiteralType, right: &LiteralType) -> LiteralType {
         match (left, right) {
             (LiteralType::Number(a), LiteralType::Number(b)) => LiteralType::Bool(a < b),
             (LiteralType::Str(a), LiteralType::Str(b)) => {
-                LiteralType::Bool(u!{&**a}.len() < u!{&**b}.len())
+                LiteralType::Bool(u! {&**a}.len() < u! {&**b}.len())
             }
             (LiteralType::Bool(a), LiteralType::Bool(b)) => {
                 LiteralType::Bool(Self::bool_to_number(a) < Self::bool_to_number(b))
             }
             (LiteralType::Str(_), LiteralType::Null) => LiteralType::Bool(true),
-            (LiteralType::Null, LiteralType::Str(b)) => {
-                LiteralType::Bool(u!{&**b}.is_empty())
-            }
+            (LiteralType::Null, LiteralType::Str(b)) => LiteralType::Bool(u! {&**b}.is_empty()),
             (l, r) => {
                 if let (LiteralType::Number(a), LiteralType::Number(b)) = (
                     Self::try_to_number(l.clone()),
@@ -840,13 +824,13 @@ impl Interpreter {
         }
     }
 
-    #[inline(always)]
+    // #[inline(always)]
     fn greater_equal(left: &LiteralType, right: &LiteralType) -> LiteralType {
         let LiteralType::Bool(less) = Self::less(left, right) else { unreachable!() };
         LiteralType::Bool(!less)
     }
 
-    #[inline(always)]
+    // #[inline(always)]
     fn greater(left: &LiteralType, right: &LiteralType) -> LiteralType {
         match (left, right) {
             (LiteralType::Number(a), LiteralType::Number(b)) => LiteralType::Bool(a > b),
@@ -856,9 +840,7 @@ impl Interpreter {
             (LiteralType::Bool(a), LiteralType::Bool(b)) => {
                 LiteralType::Bool(Self::bool_to_number(a) > Self::bool_to_number(b))
             }
-            (LiteralType::Str(a), LiteralType::Null) => {
-                LiteralType::Bool(!u!(&**a).is_empty())
-            }
+            (LiteralType::Str(a), LiteralType::Null) => LiteralType::Bool(!u!(&**a).is_empty()),
             (LiteralType::Null, LiteralType::Str(_)) => LiteralType::Bool(false),
             (l, r) => {
                 if let (LiteralType::Number(a), LiteralType::Number(b)) = (
@@ -873,27 +855,24 @@ impl Interpreter {
         }
     }
 
-    #[inline(always)]
+    // #[inline(always)]
     fn not_equal(left: &LiteralType, right: &LiteralType) -> LiteralType {
         let LiteralType::Bool(b) = Self::equal(left, right) else { panic!() };
         LiteralType::Bool(!b)
     }
 
-    #[inline(always)]
+    // #[inline(always)]
     fn equal(left: &LiteralType, right: &LiteralType) -> LiteralType {
         match (left, right) {
             (LiteralType::Number(a), LiteralType::Number(b)) => LiteralType::Bool(a == b),
             (LiteralType::Bool(a), LiteralType::Bool(b)) => LiteralType::Bool(a == b),
-            (LiteralType::Str(a), LiteralType::Str(b)) => {
-
-                LiteralType::Bool(u!(&**a) == u!(&**b))
-            }
+            (LiteralType::Str(a), LiteralType::Str(b)) => LiteralType::Bool(u!(&**a) == u!(&**b)),
             (LiteralType::Null, LiteralType::Null) => LiteralType::Bool(true),
             _ => LiteralType::Bool(false),
         }
     }
 
-    #[inline(always)]
+    // #[inline(always)]
     fn multiplication(left: LiteralType, right: LiteralType) -> LiteralType {
         let left = Self::try_to_number(left);
         let right = Self::try_to_number(right);
@@ -906,7 +885,7 @@ impl Interpreter {
         }
     }
 
-    #[inline(always)]
+    // #[inline(always)]
     fn exponentiation(left: LiteralType, right: LiteralType) -> LiteralType {
         let left = Self::try_to_number(left);
         let right = Self::try_to_number(right);
@@ -929,7 +908,7 @@ impl Interpreter {
         Box::leak(Box::new(deref!(left).repeat(n)))
     }
 
-    #[inline(always)]
+    // #[inline(always)]
     fn division(left: LiteralType, right: LiteralType) -> LiteralType {
         let left = Self::try_to_number(left);
         let right = Self::try_to_number(right);
@@ -955,7 +934,7 @@ impl Interpreter {
         }
     }
 
-    #[inline(always)]
+    // #[inline(always)]
     fn subtraction(left: LiteralType, right: LiteralType) -> LiteralType {
         let left = Self::try_to_number(left);
         let right = Self::try_to_number(right);
@@ -968,7 +947,7 @@ impl Interpreter {
         )
     }
 
-    #[inline(always)]
+    // #[inline(always)]
     fn addition(left: &LiteralType, right: &LiteralType) -> LiteralType {
         match (&left, &right) {
             (LiteralType::Number(a), LiteralType::Number(b)) => LiteralType::Number(a + b),
@@ -1004,9 +983,9 @@ impl Interpreter {
             (LiteralType::Bool(b0), LiteralType::Bool(b1)) => {
                 LiteralType::Number(Self::bool_to_number(b0) + Self::bool_to_number(b1))
             }
-            (LiteralType::Str(s), _left) => LiteralType::Str(Box::leak(
-                Box::new(deref!(s).to_string() + &Self::literal_to_str(&right)),
-            )),
+            (LiteralType::Str(s), _left) => LiteralType::Str(Box::leak(Box::new(
+                deref!(s).to_string() + &Self::literal_to_str(&right),
+            ))),
             (_right, LiteralType::Str(s)) => {
                 LiteralType::Str(Box::leak(Box::new(Self::literal_to_str(&left) + deref!(s))))
             }
@@ -1046,9 +1025,7 @@ impl Interpreter {
                 LiteralType::Bool(b) => LiteralType::Bool(!b),
                 LiteralType::Number(n) => LiteralType::Bool(Self::number_to_bool(n)),
                 LiteralType::Null => LiteralType::Bool(true),
-                LiteralType::Str(s) => {
-                    LiteralType::Bool(deref!(s).is_empty())
-                }
+                LiteralType::Str(s) => LiteralType::Bool(deref!(s).is_empty()),
                 LiteralType::Array(a) => LiteralType::Bool(!deref!(a).is_empty()),
             },
             _ => unreachable!(),
@@ -1093,13 +1070,13 @@ impl Interpreter {
         match l {
             LiteralType::Bool(b) => LiteralType::Number(Self::bool_to_number(&b)),
             LiteralType::Null => LiteralType::Number(0.0),
-            LiteralType::Str(s) =>  {
-                    if let Ok(n) = deref!(s).parse() {
-                        LiteralType::Number(n)
-                    } else {
-                        LiteralType::Str(s)
-                    }
-            },
+            LiteralType::Str(s) => {
+                if let Ok(n) = deref!(s).parse() {
+                    LiteralType::Number(n)
+                } else {
+                    LiteralType::Str(s)
+                }
+            }
             everything_else => everything_else,
         }
     }
@@ -1114,7 +1091,6 @@ impl Interpreter {
             LiteralType::Array(arr) => !deref!(arr).is_empty(),
         }
     }
-
 
     #[inline(always)]
     fn bool_to_number(b: &bool) -> f64 {

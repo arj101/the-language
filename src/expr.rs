@@ -112,11 +112,30 @@ pub enum BindingStmt {
 }
 
 #[derive(Debug, Clone)]
+pub enum BinaryOp {
+    Add = 0,
+    Sub = 1,
+    Mult = 2,
+    Div = 3,
+    Exp = 4,
+    Mod = 5,
+
+    Eq = 6,
+    NEq = 7,
+
+    Gt = 8,
+    GtEq = 9,
+
+    Lt = 10,
+    LtEq = 11,
+}
+
+#[derive(Debug, Clone)]
 pub enum BindingExpr {
     Grouping(Box<BindedExpr>),
     Binary {
         left: Box<BindedExpr>,
-        operator: Token,
+        operator: BinaryOp,
         right: Box<BindedExpr>,
     },
     Unary {
@@ -135,7 +154,7 @@ pub enum Expr {
     Grouping(Box<Expr>),
     Binary {
         left: Box<Expr>,
-        operator: Token,
+        operator: BinaryOp,
         right: Box<Expr>,
     },
     Unary {

@@ -87,7 +87,7 @@ impl Repl {
                     if let Ok(msg) = rx.try_recv() {
                         match msg {
                             Message::Val(src) => {
-                                is_running.store(true, sync::atomic::Ordering::Relaxed);
+                                is_running.store(true, sync::atomic::Ordering::SeqCst);
 
                                 lexer.reset(&src);
 
@@ -105,7 +105,7 @@ impl Repl {
                                     interpreter.interpret(&ast, interner);
                                 }
 
-                                is_running.store(false, sync::atomic::Ordering::Relaxed);
+                                is_running.store(false, sync::atomic::Ordering::SeqCst);
                             }
                             Message::Exit => {
                                 println!("bye!");
@@ -116,8 +116,8 @@ impl Repl {
                 }
             });
 
-            is_running.store(false, sync::atomic::Ordering::Relaxed);
-            is_active.store(false, sync::atomic::Ordering::Relaxed);
+            is_running.store(false, sync::atomic::Ordering::SeqCst);
+            is_active.store(false, sync::atomic::Ordering::SeqCst);
 
             if let Err(err) = result {
                 let stdout = stdout().into_raw_mode().unwrap();
@@ -199,7 +199,7 @@ impl Repl {
         let mut was_interpreting = false;
 
         loop {
-            let is_interpreting = self.is_interpreting.load(sync::atomic::Ordering::Relaxed);
+            let is_interpreting = self.is_interpreting.load(sync::atomic::Ordering::SeqCst);
 
             if was_interpreting && !is_interpreting {
                 print_raw!("{}{}", prompt_arrow, termion::cursor::Save);
@@ -223,9 +223,12 @@ impl Repl {
                         posx = 0;
                         was_interpreting = true;
                         self.is_interpreting
-                            .store(true, sync::atomic::Ordering::Relaxed);
+                            .store(true, sync::atomic::Ordering::SeqCst);
                     }
                     Key::Ctrl('c') | Key::Ctrl('d') if !is_interpreting => {
+                        self.stop_signal
+                            .store(true, sync::atomic::Ordering::Relaxed);
+                        while self.is_interpreting.load(sync::atomic::Ordering::Relaxed) {}
                         int_count += 1;
                         if int_count < 2 {
                             println_raw!(

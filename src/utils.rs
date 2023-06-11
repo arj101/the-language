@@ -18,13 +18,13 @@ fn format_literal_pretty(literal: &LiteralType) -> String {
         LiteralType::Str(s) => format!(
             "{}'{}'{}",
             color::Fg(LightGreen),
-            unsafe{&**s},
+            unsafe { &**s },
             color::Fg(color::Reset)
         ),
         LiteralType::Array(array) => {
             format!(
                 "[ {} ]",
-                unsafe{&**array}
+                unsafe { &**array }
                     .iter()
                     .map(format_literal_pretty)
                     .collect::<Vec<String>>()
@@ -39,10 +39,10 @@ fn format_literal(literal: &LiteralType) -> String {
         LiteralType::Number(n) => format!("{n}"),
         LiteralType::Null => format!("null"),
         LiteralType::Bool(b) => format!("{b}"),
-        LiteralType::Str(s) => format!("{}", unsafe{&**s}),
+        LiteralType::Str(s) => format!("{}", unsafe { &**s }),
         LiteralType::Array(array) => format!(
             "[ {} ]",
-            unsafe {&**array}
+            unsafe { &**array }
                 .iter()
                 .map(format_literal)
                 .collect::<Vec<String>>()

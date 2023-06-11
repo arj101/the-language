@@ -139,7 +139,7 @@ impl Environment {
         //to avoid huge reallocations when self.vars need to grow
         let stack = Box::leak(stack) as *mut VarStack;
 
-        self.vars.insert(name.to_usize(), Some(stack));
+        self.vars[name.to_usize()] = Some(stack);
     }
 
     #[inline]
