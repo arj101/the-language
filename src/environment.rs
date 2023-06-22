@@ -19,7 +19,7 @@ type NoHashHashMap<K, V> = HashMap<K, V, BuildHasherDefault<NoHashHasher<usize>>
 #[derive(Debug)]
 pub enum EnvVal {
     Lt(LiteralType),
-    Fn(*const (Vec<TIdentifier>, Vec<BindedStmt>)),
+    Fn(*const (Vec<TIdentifier>, BindedStmt)),
 }
 
 type ScopeVisitCounter = [usize; 65536];
@@ -28,72 +28,56 @@ type VisitingNumber = usize;
 type ScopeDepth = usize;
 
 pub struct VarStack {
-    stack: [MaybeUninit<(EnvVal, ScopeDepth, VisitingNumber)>; 256],
+    stack: [MaybeUninit<EnvVal>; 256],
     top: usize,
-
-    visit_counter: *const ScopeVisitCounter,
 }
 
 impl VarStack {
     #[inline]
-    pub fn create(val: EnvVal, curr_scope: usize, visit_counter: *const ScopeVisitCounter) -> Self {
-        let mut stack: [MaybeUninit<(EnvVal, usize, usize)>; 256] =
+    pub fn create(val: EnvVal) -> Self {
+        let mut stack: [MaybeUninit<EnvVal>; 256] =
             unsafe { MaybeUninit::uninit().assume_init() };
 
-        stack[0] = MaybeUninit::new((EnvVal::Lt(LiteralType::Null), 0, 0)); //to avoid deallocation ;)
+        stack[0] = MaybeUninit::new(EnvVal::Lt(LiteralType::Null)); //to avoid deallocation ;)
                                                                             //
-        stack[1] = MaybeUninit::new((val, curr_scope, unsafe { (*visit_counter)[curr_scope] }));
+        stack[1] = MaybeUninit::new(val);
 
         Self {
             stack,
             top: 1,
-            visit_counter,
         }
     }
 
+    // #[inline(always)]
+    // pub fn push(&mut self) {
+    //     self.top += 1;
+    //     self.stack[self.top] = MaybeUninit::new((EnvVal::Lt(LiteralType::Null), 0, 0));
+    // }
+
     #[inline(always)]
-    pub fn visit_count(&self, scope_idx: usize) -> usize {
-        unsafe { (*self.visit_counter)[scope_idx] }
+    pub fn pop(&mut self) {
+        self.top -= 1;
     }
 
     #[inline(always)]
-    pub fn var_at(&self, idx: usize) -> &(EnvVal, usize, usize) {
-        unsafe { &*self.stack[idx].as_ptr() as &(EnvVal, usize, usize) }
+    pub fn get_top(&self) -> &EnvVal {
+        unsafe { &*self.stack[self.top].as_ptr() as &EnvVal }
     }
 
     #[inline(always)]
-    pub fn define(&mut self, val: EnvVal, curr_scope: usize) {
-        let mut scope_idx = self.var_at(self.top).1;
-        while (scope_idx >= curr_scope || self.var_at(self.top).2 != self.visit_count(scope_idx))
-            && self.top > 0
-        {
-            self.top -= 1;
-            scope_idx = self.var_at(self.top).1;
-        }
-
+    pub fn define_top(&mut self, value: EnvVal) {
         self.top += 1;
-        if self.top < self.stack.len() {
-            self.stack[self.top].write((val, curr_scope, self.visit_count(curr_scope)));
-            return;
-        }
-
-        panic!("Maximum shadowing depth exceeded");
+        self.stack[self.top].write(value);
     }
 
     #[inline(always)]
-    pub fn get(&mut self, curr_scope: usize) -> &EnvVal {
-        let mut scope_idx = self.var_at(self.top).1;
-        while scope_idx > curr_scope || self.var_at(self.top).2 != self.visit_count(scope_idx) {
-            self.top -= 1;
-            scope_idx = self.var_at(self.top).1;
-        }
-
-        &self.var_at(self.top).0
+    pub fn update_top(&mut self, value: EnvVal) {
+        self.stack[self.top].write(value);
     }
 }
 
 pub struct Environment {
-    vars: Vec<Option<*mut VarStack>>,
+    vars: Vec<*mut VarStack>,
 
     visit_counter: ScopeVisitCounter,
 
@@ -101,11 +85,17 @@ pub struct Environment {
     // var_scope_map: RefCell<NoHashHashMap<StrSymbol, Vec<usize>>>,
 }
 
+macro_rules! leak {
+    ($var:expr) => {
+        Box::leak(Box::new($var)) as *mut _
+    }
+}
+
 impl Environment {
     pub fn new(symbol_count: usize) -> Self {
         let mut vars = Vec::with_capacity(symbol_count);
         for _ in 0..symbol_count {
-            vars.push(None)
+            vars.push(leak!(VarStack::create(EnvVal::Lt(LiteralType::Null))))
         }
 
         Self {
@@ -118,68 +108,50 @@ impl Environment {
     pub fn expand_capacity(&mut self, symbol_count: usize) {
         let curr_len = self.vars.len() as isize;
         for _ in 0..(symbol_count as isize - curr_len).max(0) {
-            self.vars.push(None);
+            self.vars.push(leak!(VarStack::create(EnvVal::Lt(LiteralType::Null))));
         }
     }
 
     #[inline(always)]
     pub fn define(&mut self, name: StrSymbol, value: EnvVal) {
-        if let Some(var_stack) = self.vars[name.to_usize()] {
-            let var_stack: *mut VarStack = var_stack;
-            unsafe { &mut *var_stack }.define(value, self.curr_scope);
-            return;
-        }
-
-        let stack = Box::new(VarStack::create(
-            value,
-            self.curr_scope,
-            &self.visit_counter as *const ScopeVisitCounter,
-        ));
-
-        //to avoid huge reallocations when self.vars need to grow
-        let stack = Box::leak(stack) as *mut VarStack;
-
-        self.vars[name.to_usize()] = Some(stack);
+        unsafe { &mut *(self.vars[name.to_usize()]) }.define_top(value);
     }
 
     #[inline]
     pub fn has_var(&self, name: &StrSymbol) -> bool {
-        self.vars[name.to_usize()].is_some()
+        // self.vars[name.to_usize()].()
+        //
+        true
     }
 
     #[inline(always)]
     pub fn push_scope(&mut self) {
-        self.curr_scope += 1;
-        if self.curr_scope >= 65536 {
-            panic!("Nested scoping limit exceeded!")
-        }
-
-        self.visit_counter[self.curr_scope] += 1;
+        // self.curr_scope += 1;
+        // if self.curr_scope >= 65536 {
+        //     panic!("Nested scoping limit exceeded!")
+        // }
+        //
+        // self.visit_counter[self.curr_scope] += 1;
     }
 
     #[inline(always)]
     pub fn pop_scope(&mut self) {
-        self.curr_scope -= 1;
+        // self.curr_scope -= 1;
     }
 
     #[inline(always)]
     pub fn update(&mut self, name: &StrSymbol, value: EnvVal) {
-        if let Some(var_stack) = self.vars[name.to_usize()] {
-            let var_stack: *mut VarStack = var_stack;
-            return unsafe { &mut *var_stack }.define(value, self.curr_scope);
-        }
+        unsafe { &mut *(self.vars[name.to_usize()]) }.update_top(value);
+    }
 
-        println_raw!("{:?}: no such variable in scope", name);
+    #[inline(always)]
+    pub fn get_varstack(&mut self, name: &StrSymbol) -> &mut VarStack {
+         unsafe { &mut *self.vars[name.to_usize()] }
     }
 
     #[inline(always)]
     pub fn get(&mut self, name: &StrSymbol) -> &EnvVal {
-        if let Some(var_stack) = self.vars[name.to_usize()] {
-            let var_stack: *mut VarStack = var_stack;
-            return unsafe { &mut *var_stack }.get(self.curr_scope);
-        }
-
-        panic!("{:?}: no such variable in scope", name);
+         unsafe { &mut *(self.vars[name.to_usize()]) }.get_top()
     }
 }
 

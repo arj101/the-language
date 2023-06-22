@@ -44,7 +44,9 @@ macro_rules! deref_mut {
 
 #[cfg(not(debug_assertions))]
 macro_rules! unreachable {
-    () =>{ unsafe { std::hint::unreachable_unchecked() } }
+    () => {
+        unsafe { std::hint::unreachable_unchecked() }
+    };
 }
 
 struct InterpreterFlags {
@@ -89,15 +91,15 @@ impl Interpreter {
         }
     }
 
-    #[inline(always)]
-    fn push_env(&mut self) {
-        self.env.push_scope();
-    }
+    // #[inline(always)]
+    // fn push_env(&mut self) {
+    //     self.env.push_scope();
+    // }
 
-    #[inline(always)]
-    fn pop_env(&mut self) {
-        self.env.pop_scope();
-    }
+    // #[inline(always)]
+    // fn pop_env(&mut self) {
+    //     self.env.pop_scope();
+    // }
 
     #[inline(always)]
     pub fn evaluate(&mut self, ast: &Expr) -> LiteralType {
@@ -105,23 +107,23 @@ impl Interpreter {
     }
 
     fn exec_block(&mut self, statements: &[Stmt]) -> LiteralType {
-        self.push_env();
+        // self.push_env();
         let mut rt_val;
         for stmt in statements {
             if let Stmt::Return(expr) = stmt {
                 let val = self.eval_expr(&expr);
                 self.flags.return_backtrack = true;
-                self.pop_env();
+                // self.pop_env();
                 return val;
             } else {
                 rt_val = self.execute_stmt(&stmt);
                 if self.flags.return_backtrack {
-                    self.pop_env();
+                    // self.pop_env();
                     return rt_val;
                 }
             }
         }
-        self.pop_env();
+        // self.pop_env();
         LiteralType::Null
     }
 
@@ -188,7 +190,7 @@ impl Interpreter {
                 updation,
                 body,
             } => {
-                self.push_env();
+                // self.push_env();
 
                 if let Some(init) = init {
                     self.execute_stmt(init);
@@ -206,7 +208,7 @@ impl Interpreter {
                         if self.flags.return_backtrack
                             || self.stop_signal.load(std::sync::atomic::Ordering::Relaxed)
                         {
-                            self.pop_env();
+                            // self.pop_env();
                             return rt_val;
                         }
                         self.execute_stmt(updation);
@@ -217,13 +219,13 @@ impl Interpreter {
                         if self.flags.return_backtrack
                             || self.stop_signal.load(std::sync::atomic::Ordering::Relaxed)
                         {
-                            self.pop_env();
+                            // self.pop_env();
                             return rt_val;
                         }
                     }
                 }
 
-                self.pop_env();
+                // self.pop_env();
                 LiteralType::Null
             }
             Stmt::Assignment { id, expr } => {
@@ -239,10 +241,10 @@ impl Interpreter {
                 if let Stmt::Block(stmts) = *body.clone() {
                     self.env.define(
                         ident.inner(),
-                        EnvVal::Fn(Box::leak(Box::new((
-                            params.to_vec(),
-                            stmts.iter().map(Self::bind).collect(),
-                        ))) as *const _),
+                        EnvVal::Fn(
+                            Box::leak(Box::new((params.to_vec(), Self::bind_block(params, &stmts))))
+                                as *const _,
+                        ),
                     )
                 };
                 LiteralType::Null
@@ -290,9 +292,9 @@ impl Interpreter {
     }
 
     fn exec_binded_block(&mut self, block: &BindingStmt) -> LiteralType {
-        let BindingStmt::Block(stmts) = block else { unreachable!() };
+        let BindingStmt::Block(vars, stmts) = block else { unreachable!() };
 
-        self.exec_binded(stmts, true)
+        self.exec_binded(vars, stmts)
     }
 
     fn exec_binded_if(&mut self, stmt: &BindingStmt) -> LiteralType {
@@ -321,7 +323,7 @@ impl Interpreter {
     fn exec_binded_loop(&mut self, stmt: &BindingStmt) -> LiteralType {
         let BindingStmt::Loop { entry_controlled, init, expr: condition, updation, body } = stmt else { unreachable!() };
 
-        self.push_env();
+        // self.push_env();
 
         if let Some(init) = init {
             (init.exec)(self, &init.stmt);
@@ -339,7 +341,7 @@ impl Interpreter {
                 if self.flags.return_backtrack
                     || self.stop_signal.load(std::sync::atomic::Ordering::Relaxed)
                 {
-                    self.pop_env();
+                    // self.pop_env();
                     return rt_val;
                 }
                 (updation.exec)(self, &updation.stmt);
@@ -350,13 +352,13 @@ impl Interpreter {
                 if self.flags.return_backtrack
                     || self.stop_signal.load(std::sync::atomic::Ordering::Relaxed)
                 {
-                    self.pop_env();
+                    // self.pop_env();
                     return rt_val;
                 }
             }
         }
 
-        self.pop_env();
+        // self.pop_env();
         LiteralType::Null
     }
 
@@ -372,8 +374,8 @@ impl Interpreter {
     fn exec_binded_fn_def(&mut self, stmt: &BindingStmt) -> LiteralType {
         let BindingStmt::FunctionDef { ident, params, body } = stmt else { unreachable!() };
 
-        if let BindingStmt::Block(stmts) = &body.stmt {
-            let func = (params.to_vec(), stmts.to_vec());
+        if let BindingStmt::Block(vars, stmts) = &body.stmt {
+            let func = (params.to_vec(), *body.clone());
             let func = Box::new(func);
             let func = Box::leak(func);
             self.env.define(ident.inner(), EnvVal::Fn(func as *const _))
@@ -389,6 +391,39 @@ impl Interpreter {
         rt_val
     }
 
+    fn bind_block(predefined_vars: &[TIdentifier], stmts: &[Stmt]) -> BindedStmt {
+        let mut vars = predefined_vars.to_vec();
+        let mut binded_stmts = vec![];
+
+        for stmt in stmts {
+            if let Stmt::Decl { id, expr: _ } = stmt {
+                vars.push(id.clone())
+            }
+            binded_stmts.push(Self::bind(stmt));
+        }
+
+        BindedStmt {
+            stmt: BindingStmt::Block(vars, binded_stmts),
+            exec: Self::exec_binded_block,
+        }
+    }
+
+    fn bind_fn_def(ident: TIdentifier, params: &[TIdentifier], body: &Stmt)-> BindedStmt {
+        if let Stmt::Block(stmts) = body {
+            BindedStmt{
+                stmt: BindingStmt::FunctionDef { ident, params: params.to_vec(), body: Box::new(Self::bind_block(params, stmts))},
+                    exec: Self::exec_binded_fn_def,
+                
+            }
+        } else {
+            BindedStmt {
+                stmt: BindingStmt::FunctionDef { ident, params: params.to_vec(), body: Box::new(Self::bind(body)) },
+                exec: Self::exec_binded_fn_def,
+            }
+        }
+
+    }
+
     fn bind(stmt: &Stmt) -> BindedStmt {
         macro_rules! bind {
             ($stmt:expr => $f:ident) => {
@@ -400,10 +435,7 @@ impl Interpreter {
         }
 
         match stmt {
-            Stmt::Block(stmts) => BindedStmt {
-                stmt: BindingStmt::Block(stmts.iter().map(Self::bind).collect()),
-                exec: Self::exec_binded_block,
-            },
+            Stmt::Block(stmts) => Self::bind_block(&[], stmts),
             Stmt::ExprStmt(expr) => {
                 bind!(BindingStmt::ExprStmt(Self::bind_expr(expr)) => exec_binded_expr)
             }
@@ -465,7 +497,7 @@ impl Interpreter {
         let BindingExpr::Binary { left, operator, right } = binary else { unreachable!() };
 
         let left = (left.exec)(self, &left.expr);
-        let  right = (right.exec)(self, &right.expr);
+        let right = (right.exec)(self, &right.expr);
 
         macro_rules! eval {
             ($( $token:pat => $function:expr ),* $(,)?) => {
@@ -480,7 +512,6 @@ impl Interpreter {
 
         use crate::expr::BinaryOp::*;
 
-        
         eval! {
             Add => Self::addition(&left, &right),
             Sub => Self::subtraction(left, right),
@@ -529,7 +560,7 @@ impl Interpreter {
 
     fn eval_binded_fn_call(&mut self, fn_call: &BindingExpr) -> LiteralType {
         let BindingExpr::FnCall(ident, args) = fn_call else { unreachable!() };
-        self.push_env();
+        // self.push_env();
 
         let EnvVal::Fn(fn_ptr) = self.env.get(&ident.0) else { panic!("Cannot call a variable as function!") };
         let (params, stmts) = unsafe { &**fn_ptr };
@@ -545,10 +576,10 @@ impl Interpreter {
                 .define(param.inner(), EnvVal::Lt(LiteralType::Null));
         }
 
-        let rt_val = self.exec_binded(&stmts, false);
+        let rt_val = (stmts.exec)(self, &stmts.stmt);
         self.flags.return_backtrack = false;
 
-        self.pop_env();
+        // self.pop_env();
         rt_val
     }
 
@@ -677,7 +708,7 @@ impl Interpreter {
                 ),
             },
             Expr::FnCall(ident, args) => {
-                self.push_env();
+                // self.push_env();
 
                 let (params, stmts) = if let EnvVal::Fn(fn_def) = self.env.get(&ident.0) {
                     unsafe { &**fn_def }
@@ -696,33 +727,34 @@ impl Interpreter {
                         .define(param.inner(), EnvVal::Lt((LiteralType::Null)));
                 }
 
-                let rt_val = self.exec_binded(&stmts, false);
+                let rt_val = (stmts.exec)(self, &stmts.stmt);
                 self.flags.return_backtrack = false;
 
-                self.pop_env();
+                // self.pop_env();
                 rt_val
             }
         }
     }
 
     #[inline(always)]
-    fn exec_binded(&mut self, stmts: &[BindedStmt], new_scope: bool) -> LiteralType {
-        if new_scope {
-            self.push_env();
-        }
+    fn exec_binded(
+        &mut self,
+        vars: &[TIdentifier],
+        stmts: &[BindedStmt],
+    ) -> LiteralType {
 
         for stmt in stmts {
             let rt_val = (stmt.exec)(self, &stmt.stmt);
             if self.flags.return_backtrack {
-                if new_scope {
-                    self.pop_env();
+                for var in vars {
+                    self.env.get_varstack(&var.inner()).pop()
                 }
                 return rt_val;
             }
         }
 
-        if new_scope {
-            self.pop_env();
+        for var in vars {
+            self.env.get_varstack(&var.inner()).pop() //remove the variable
         }
         LiteralType::Null
     }

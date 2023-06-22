@@ -1,4 +1,5 @@
 use crate::interpreter::Interpreter;
+use crate::tokens::StrSymbol;
 use crate::tokens::TIdentifier;
 use crate::tokens::Token;
 use crate::tokens::TokenType;
@@ -89,7 +90,7 @@ pub enum BindingStmt {
         id: TIdentifier,
         expr: BindedExpr,
     },
-    Block(Vec<BindedStmt>),
+    Block(Vec<TIdentifier>, Vec<BindedStmt>),
     // move the below into Expr after implementing `return`
     Return(BindedExpr),
     If {
